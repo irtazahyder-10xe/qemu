@@ -174,6 +174,7 @@ static bool riscv_aplic_irq_rectified_val(RISCVAPLICState *aplic,
     }
 
     sm = sourcecfg & APLIC_SOURCECFG_SM_MASK;
+    // BUG: Does not deal with APLIC_SOURCECFG_SM_DETACH
     if (sm == APLIC_SOURCECFG_SM_INACTIVE) {
         return false;
     }

@@ -28,6 +28,7 @@
 #define VIRT_CPUS_MAX                  (1 << VIRT_CPUS_MAX_BITS)
 #define VIRT_SOCKETS_MAX_BITS          2
 #define VIRT_SOCKETS_MAX               (1 << VIRT_SOCKETS_MAX_BITS)
+#define INTR_DOMAIN_MAX                16
 
 #define TYPE_RISCV_VIRT_MACHINE MACHINE_TYPE_NAME("virt")
 typedef struct RISCVVirtState RISCVVirtState;
@@ -39,6 +40,12 @@ typedef enum RISCVVirtAIAType {
     VIRT_AIA_TYPE_APLIC,
     VIRT_AIA_TYPE_APLIC_IMSIC,
 } RISCVVirtAIAType;
+
+typedef enum RISCVVirtIntrDomainType {
+    S = 1,
+    VS,
+    M,
+} RISCVVirtIntrDomainType;
 
 struct RISCVVirtState {
     /*< private >*/
@@ -56,6 +63,9 @@ struct RISCVVirtState {
     bool have_aclint;
     RISCVVirtAIAType aia_type;
     int aia_guests;
+    uint8_t domain_count;
+    RISCVVirtIntrDomainType domain_mode[INTR_DOMAIN_MAX];
+    uint8_t domain_parent[INTR_DOMAIN_MAX];
     char *oem_id;
     char *oem_table_id;
     OnOffAuto acpi;
