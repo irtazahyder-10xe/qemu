@@ -18,12 +18,11 @@
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "qapi/visitor.h"
 #include "qemu/osdep.h"
+#include "qapi/visitor.h"
 #include "qemu/units.h"
 #include "qemu/error-report.h"
 #include "qemu/guest-random.h"
-#include "qapi/error.h"
 #include "hw/boards.h"
 #include "hw/loader.h"
 #include "hw/sysbus.h"
@@ -54,7 +53,6 @@
 #include "hw/display/ramfb.h"
 #include "hw/acpi/aml-build.h"
 #include "qapi/qapi-visit-common.h"
-#include <string.h>
 
 /*
  * The virt machine physical address space used by some of the devices
@@ -1172,7 +1170,7 @@ static DeviceState *virt_create_plic(const MemMapEntry *memmap, int socket,
 static DeviceState *virt_create_aia(RISCVVirtAIAType aia_type, int aia_guests,
                                     uint8_t domain_count,
                                     RISCVVirtIntrDomainType *domain_mode,
-                                    uint8_t *domain_parent,
+                                    int8_t *domain_parent,
                                     const MemMapEntry *memmap, int socket,
                                     int base_hartid, int hart_count)
 {
@@ -1222,7 +1220,7 @@ static DeviceState *virt_create_aia(RISCVVirtAIAType aia_type, int aia_guests,
     /* Per-socket S-level APLIC */
     // NOTE: SMODE Domain
     aplic_children[0] = aplic_root;
-    for (uint8_t i = 1; i < domain_count; i++){
+    for (i = 1; i < domain_count; i++){
         aplic_children[i] = riscv_aplic_create(memmap[VIRT_APLIC_S].base +
                                      socket * memmap[VIRT_APLIC_S].size,
                                      memmap[VIRT_APLIC_S].size,
@@ -1231,7 +1229,7 @@ static DeviceState *virt_create_aia(RISCVVirtAIAType aia_type, int aia_guests,
                                      VIRT_IRQCHIP_NUM_SOURCES,
                                      VIRT_IRQCHIP_NUM_PRIO_BITS,
                                      msimode, (domain_mode[i] == M),
-                                     aplic_children[domain_parent[i] - 1]);
+                                     aplic_children[domain_parent[i]]);
     }
 
     return kvm_enabled() ? aplic_children[1] : aplic_root;
@@ -1582,6 +1580,11 @@ static void virt_machine_instance_init(Object *obj)
     s->oem_id = g_strndup(ACPI_BUILD_APPNAME6, 6);
     s->oem_table_id = g_strndup(ACPI_BUILD_APPNAME8, 8);
     s->acpi = ON_OFF_AUTO_AUTO;
+    s->domain_count = 2;
+    s->domain_mode[0] = M;
+    s->domain_mode[1] = S;
+    s->domain_parent[0] = -1;
+    s->domain_parent[1] = 0;
 }
 
 static char *virt_get_aia_guests(Object *obj, Error **errp)
@@ -1656,10 +1659,11 @@ static void virt_set_domain_count(Object *obj, Visitor *v, const char *name, voi
     if (!visit_type_uint8(v, name, &value, errp)) {
         return;
     }
-    if (value > INTR_DOMAIN_MAX) {
+
+    if (value > INTR_DOMAIN_MAX || value < 1) {
         error_setg(errp, "Invalid domain-count.");
-        error_setg(errp, "domain-count should be less than or equal "
-                   "to %d", INTR_DOMAIN_MAX);
+        error_setg(errp, "domain-count should be in range [1,%d]",
+                   INTR_DOMAIN_MAX);
         return;
     }
     s->domain_count = value;
@@ -1668,40 +1672,37 @@ static void virt_set_domain_count(Object *obj, Visitor *v, const char *name, voi
 static char *virt_get_domain_mode(Object *obj, Error **errp)
 {
     RISCVVirtState *s = RISCV_VIRT_MACHINE(obj);
-    char *value;
+    /* Space for the single letter mode, comma and terminating character */
+    char *value[s->domain_count + 1];
 
     for (uint8_t i = 0; i < s->domain_count; i++) {
-        if (s->domain_mode[i] == S) {
-            strcat(value, "S,");
-        } else if (s->domain_mode[i] == VS) {
-            strcat(value, "VS,");
-        } else {
-            strcat(value, "M,");
-        }
+        value[i] = (char *) ((s->domain_mode[i] == S) ? "S" : "M");
     }
 
-    return g_strdup(value);
+    value[s->domain_count] = NULL;
+    return g_strjoinv(",", value);
 }
 
 static void virt_set_domain_mode(Object *obj, const char *value, Error **errp)
 {
     RISCVVirtState *s = RISCV_VIRT_MACHINE(obj);
-    char *mode = strtok((char *)value, ",");
-    if (!strcmp(mode,"M")) {
-        error_setg(errp, "Root mode should always be M");
+
+    char *mode = strtok((char *)value, "_");
+    if (strcmp(mode,"M")) {
+        error_setg(errp, "Root domain mode should always be M");
         return;
     }
 
-    for (uint8_t count = 0; count < s->domain_count; count++){
-        if (strcmp(mode, "S")) {
-            s->domain_mode[count] = S;
-        } else if (strcmp(mode, "VS")) {
-            s->domain_mode[count] = VS;
-        } else if (strcmp(mode, "M")) {
-            s->domain_mode[count] = M;
+    uint8_t count = 0;
+    for (; mode != 0; mode = strtok(NULL, "_")){
+        if (!strcmp(mode, "S")) {
+            s->domain_mode[count++] = S;
+        } else if (!strcmp(mode, "M")) {
+            s->domain_mode[count++] = M;
         } else {
-            error_setg(errp, "Invalid mode %s. Only modes M, S, VS allowed",
+            error_setg(errp, "Invalid interrupt domain mode %s",
                        mode);
+            error_append_hint(errp, "Valid modes are M or S ONLY.\n");
             return;
         }
     }
@@ -1710,45 +1711,66 @@ static void virt_set_domain_mode(Object *obj, const char *value, Error **errp)
 static char *virt_get_domain_parent(Object *obj, Error **errp)
 {
     RISCVVirtState *s = RISCV_VIRT_MACHINE(obj);
-    char *tree;
-    /* As INTR_DOMAIN_MAX is 2 digits */
-    char buff[3];
+
+    /* As INTR_DOMAIN_MAX is 2 digits + sign + , + /0 */
+    GString *str = g_string_new("");
+
     for (uint8_t i = 0; i < s->domain_count; i++) {
-        sprintf(buff, "%u,", s->domain_parent[i]);
-        strcpy(tree, buff);
+        // g_string_append_printf handles the conversion and allocation
+        g_string_append_printf(str, "%d", s->domain_parent[i]);
+
+        if (i < (s->domain_count - 1)) {
+            g_string_append_c(str, ',');
+        }
     }
-    return tree;
+
+    return g_string_free(str, FALSE);
 }
 
 static void virt_set_domain_parent(Object *obj, const char *value, Error **errp)
 {
     RISCVVirtState *s = RISCV_VIRT_MACHINE(obj);
-    char *parent = strtok((char *)value, ",");
-    if (atoi(parent) != 0) {
-        error_setg(errp, "Root node must always have value 0");
+
+    char *current = strtok((char *)value, "_");
+    if (atoi(current) != -1) {
+        error_setg(errp, "Root node must always have parent == -1");
         return;
     }
 
-    /* Root domain has index 1 */
-    char *current = parent;
-    for (uint8_t i = 0; (i < s->domain_count) && current != 0; i++) {
-        if (atoi(current) < atoi(parent)) {
-            error_setg(errp, "domain-parents must be in ascending order");
+    s->domain_parent[0] = -1;
+
+    char *prev = current;
+    current = strtok(NULL, "_");
+
+    /* Root domain has index -1 */
+    /* Only considering list uptil index = domain_count */
+    uint8_t count = 1;
+    for (; current != 0; current = strtok(NULL, "_")) {
+        /* Checking for valid parent value */
+        int parent_index = atoi(current);
+        if (atoi(prev) > parent_index) {
+            error_setg(errp, "Given list must be in ascending order");
             return;
-        } else if (i != 0 && atoi(current) == 0) {
-            error_setg(errp, "Invalid parent: "
-                       "Only the root domain can have parent 0");
+        } else if (parent_index == -1) {
+            error_setg(errp, "Invalid parent. "
+                       "Only the root domain can have parent -1");
             return;
-        } else if (atoi(current) > i) {
-            error_setg(errp, "Given parent does not exist."
-                       "Parent index should be less than child index");
+        } else if (parent_index >= count || parent_index < 0 ) {
+            error_setg(errp, "Given parent does not exist.");
+            error_append_hint(errp, "Parent index should be less than child index");
             return;
- 
         }
 
-        parent = current;
-        s->domain_parent[i] = atoi(current);
-        current = strtok(NULL, ",");
+        /* Checking if current domain and domain parents follow AIA rule:
+         * S mode domain can only have M mode domain as parent */
+        if (s->domain_mode[count] == S && s->domain_mode[parent_index] != M) {
+            error_setg(errp, "Invalid parent for Supervisor interrupt domain.");
+            error_append_hint(errp, "Parent must be a Machine interrupt domain.\n");
+            return;
+        }
+
+        prev = current;
+        s->domain_parent[count++] = atoi(current);
     }
 }
 
@@ -1872,7 +1894,7 @@ static void virt_machine_class_init(ObjectClass *oc, void *data)
 
     object_class_property_add_str(oc, "domain-parent", virt_get_domain_parent,
                                   virt_set_domain_parent);
-    object_class_property_set_description(oc, "domain-parents",
+    object_class_property_set_description(oc, "domain-parent",
                                           "Comma seperated list containing index "
                                           "of parent for node i. "
                                           "I.e. 0,1,1 -> Node 1 has no parents, but "

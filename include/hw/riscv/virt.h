@@ -43,8 +43,7 @@ typedef enum RISCVVirtAIAType {
 
 typedef enum RISCVVirtIntrDomainType {
     S = 1,
-    VS,
-    M,
+    M = 3,
 } RISCVVirtIntrDomainType;
 
 struct RISCVVirtState {
@@ -65,7 +64,7 @@ struct RISCVVirtState {
     int aia_guests;
     uint8_t domain_count;
     RISCVVirtIntrDomainType domain_mode[INTR_DOMAIN_MAX];
-    uint8_t domain_parent[INTR_DOMAIN_MAX];
+    int8_t domain_parent[INTR_DOMAIN_MAX];
     char *oem_id;
     char *oem_table_id;
     OnOffAuto acpi;
