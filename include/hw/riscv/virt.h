@@ -24,11 +24,11 @@
 #include "hw/sysbus.h"
 #include "hw/block/flash.h"
 
-#define VIRT_CPUS_MAX_BITS             9
+#define VIRT_CPUS_MAX_BITS             7
 #define VIRT_CPUS_MAX                  (1 << VIRT_CPUS_MAX_BITS)
 #define VIRT_SOCKETS_MAX_BITS          2
 #define VIRT_SOCKETS_MAX               (1 << VIRT_SOCKETS_MAX_BITS)
-#define INTR_DOMAIN_MAX                16
+#define IRQ_DOMAIN_MAX                16
 
 #define TYPE_RISCV_VIRT_MACHINE MACHINE_TYPE_NAME("virt")
 typedef struct RISCVVirtState RISCVVirtState;
@@ -63,8 +63,8 @@ struct RISCVVirtState {
     RISCVVirtAIAType aia_type;
     int aia_guests;
     uint8_t domain_count;
-    RISCVVirtIntrDomainType domain_mode[INTR_DOMAIN_MAX];
-    int8_t domain_parent[INTR_DOMAIN_MAX];
+    RISCVVirtIntrDomainType domain_mode[IRQ_DOMAIN_MAX];
+    int8_t domain_parent[IRQ_DOMAIN_MAX];
     char *oem_id;
     char *oem_table_id;
     OnOffAuto acpi;

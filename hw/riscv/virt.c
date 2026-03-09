@@ -65,6 +65,7 @@
  */
 
 #define VIRT_IMSIC_GROUP_MAX_SIZE      (1U << IMSIC_MMIO_GROUP_MIN_SHIFT)
+#define IRQ_DOMAINS_PER_SOCKET        4
 #if VIRT_IMSIC_GROUP_MAX_SIZE < \
     IMSIC_GROUP_SIZE(VIRT_CPUS_MAX_BITS, VIRT_IRQCHIP_MAX_GUESTS_BITS)
 #error "Can't accommodate single IMSIC group in address space"
@@ -92,8 +93,10 @@ static const MemMapEntry virt_memmap[] = {
     [VIRT_PCIE_PIO] =     {  0x3000000,       0x10000 },
     [VIRT_PLATFORM_BUS] = {  0x4000000,     0x2000000 },
     [VIRT_PLIC] =         {  0xc000000, VIRT_PLIC_SIZE(VIRT_CPUS_MAX * 2) },
-    [VIRT_APLIC_M] =      {  0xc000000, APLIC_SIZE(VIRT_CPUS_MAX) },
-    [VIRT_APLIC_S] =      {  0xd000000, APLIC_SIZE(VIRT_CPUS_MAX) },
+    [VIRT_APLIC_M] =      {  0xc000000, APLIC_SIZE(VIRT_CPUS_MAX,
+                                                   IRQ_DOMAINS_PER_SOCKET) },
+    [VIRT_APLIC_S] =      {  0xd000000, APLIC_SIZE(VIRT_CPUS_MAX,
+                                                   IRQ_DOMAINS_PER_SOCKET) },
     [VIRT_UART0] =        { 0x10000000,         0x100 },
     [VIRT_VIRTIO] =       { 0x10001000,        0x1000 },
     [VIRT_FW_CFG] =       { 0x10100000,          0x18 },
@@ -659,7 +662,7 @@ static void create_fdt_one_aplic(RISCVVirtState *s, int socket,
             child_prop_arr[2 * i] = 0x1;
             child_prop_arr[2 * i + 1] = aplic_child_phandle[i];
 
-            /* < {child_phandle first_intr last_intr} > */
+            /* < {child_phandle first_irq last_irq} > */
             delegate_prop_arr[6 * i] = 0x1;
             delegate_prop_arr[6 * i + 1] = aplic_child_phandle[i];
             delegate_prop_arr[6 * i + 2] = 0x1;
@@ -684,7 +687,7 @@ static void create_fdt_one_aplic(RISCVVirtState *s, int socket,
     g_free(aplic_cells);
 }
 
-static uint8_t get_intr_domain_children(int8_t parent_index,
+static uint8_t get_irq_domain_children(int8_t parent_index,
                                         uint32_t base_phandle,
                                         uint32_t *child_phandles,
                                         int8_t *domain_parent,
@@ -701,7 +704,6 @@ static uint8_t get_intr_domain_children(int8_t parent_index,
     return child_index;
 }
 
-/* TODO: Update to generate accurate file tree */
 static void create_fdt_socket_aplic(RISCVVirtState *s,
                                     const MemMapEntry *memmap, int socket,
                                     uint32_t msi_m_phandle,
@@ -715,7 +717,7 @@ static void create_fdt_socket_aplic(RISCVVirtState *s,
     hwaddr aplic_addr, aplic_size;
     MachineState *ms = MACHINE(s);
     uint32_t aplic_root_phandle;
-    uint32_t child_phandles[INTR_DOMAIN_MAX], child_count;
+    uint32_t child_phandles[IRQ_DOMAIN_MAX], child_count;
 
     bool msimode = s->aia_type == VIRT_AIA_TYPE_APLIC_IMSIC;
     uint8_t scount = 0, mcount = 0;
@@ -730,7 +732,7 @@ static void create_fdt_socket_aplic(RISCVVirtState *s,
         aplic_addr = memmap[VIRT_APLIC_M].base +
                      socket * memmap[VIRT_APLIC_M].size;
 
-        child_count = get_intr_domain_children(0, aplic_root_phandle,
+        child_count = get_irq_domain_children(0, aplic_root_phandle,
                                                child_phandles,
                                                s->domain_parent,
                                                s->domain_count);
@@ -761,7 +763,7 @@ static void create_fdt_socket_aplic(RISCVVirtState *s,
 
         msi_phandle = mmode ? msi_m_phandle : msi_s_phandle;
 
-        child_count = get_intr_domain_children(i, aplic_root_phandle,
+        child_count = get_irq_domain_children(i, aplic_root_phandle,
                                                child_phandles,
                                                s->domain_parent,
                                                s->domain_count);
@@ -1250,8 +1252,7 @@ static DeviceState *virt_create_aia(RISCVVirtAIAType aia_type, int aia_guests,
     int i;
     hwaddr addr;
     uint32_t guest_bits;
-    DeviceState *aplic_children[domain_count - 1];
-    DeviceState *aplic_root = NULL;
+    DeviceState *aplic[domain_count];
     bool msimode = aia_type == VIRT_AIA_TYPE_APLIC_IMSIC;
 
     if (msimode) {
@@ -1276,36 +1277,60 @@ static DeviceState *virt_create_aia(RISCVVirtAIAType aia_type, int aia_guests,
         }
     }
 
-    // NOTE: All harts are assigned to all interrupt domains
+    /* NOTE: All harts are assigned to all interrupt domains */
+    hwaddr aplic_addr, aplic_size;
+    uint8_t scount = 0, mcount = 0;
     if (!kvm_enabled()) {
         /* Per-socket M-level APLIC */
-        // NOTE: MMODE Domain
-        aplic_root = riscv_aplic_create(memmap[VIRT_APLIC_M].base +
-                                     socket * memmap[VIRT_APLIC_M].size,
-                                     memmap[VIRT_APLIC_M].size,
+        aplic_size = (msimode) ? APLIC_MIN_SIZE : memmap[VIRT_APLIC_M].size;
+        aplic_addr = memmap[VIRT_APLIC_M].base + socket * memmap[VIRT_APLIC_M].size;
+
+        aplic[0] = riscv_aplic_create(aplic_addr,
+                                     (msimode) ? APLIC_MIN_SIZE : aplic_size,
                                      (msimode) ? 0 : base_hartid,
                                      (msimode) ? 0 : hart_count,
                                      VIRT_IRQCHIP_NUM_SOURCES,
                                      VIRT_IRQCHIP_NUM_PRIO_BITS,
                                      msimode, true, NULL);
+        mcount++;
     }
 
-    /* Per-socket S-level APLIC */
-    // NOTE: SMODE Domain
-    aplic_children[0] = aplic_root;
+    /**
+     * Given the current memory map, the we can have only 4 domains per socket
+     * (2 Machine interrupt domains, and 2 supervisor interrupt domains)
+     *
+     * Implementation stores all Machine Interupt Domains MMRs from base address
+     * 0xc000000 all Supervisor Interrupt Domain MMRs from base address 0xd000000
+     *
+     * Maximum interrupt domains that can exist are <= IRQ_DOMAIN_MAX are set.
+     */
     for (i = 1; i < domain_count; i++){
-        aplic_children[i] = riscv_aplic_create(memmap[VIRT_APLIC_S].base +
-                                     socket * memmap[VIRT_APLIC_S].size,
-                                     memmap[VIRT_APLIC_S].size,
+        bool mmode = (domain_mode[i] == M);
+        aplic_addr = mmode ?
+            memmap[VIRT_APLIC_M].base + (socket * memmap[VIRT_APLIC_M].size) +
+            ((mcount++) * APLIC_MIN_SIZE):
+            memmap[VIRT_APLIC_S].base + (socket * memmap[VIRT_APLIC_S].size) +
+            ((scount++) * APLIC_MIN_SIZE);
+
+        aplic_size = APLIC_MIN_SIZE;
+        if (!msimode) {
+            if (mmode) {
+                aplic_size = memmap[VIRT_APLIC_M].size;
+            } else {
+                aplic_size = memmap[VIRT_APLIC_S].size;
+            }
+        }
+
+        aplic[i] = riscv_aplic_create(aplic_addr, aplic_size,
                                      (msimode) ? 0 : base_hartid,
                                      (msimode) ? 0 : hart_count,
                                      VIRT_IRQCHIP_NUM_SOURCES,
                                      VIRT_IRQCHIP_NUM_PRIO_BITS,
-                                     msimode, (domain_mode[i] == M),
-                                     aplic_children[domain_parent[i]]);
+                                     msimode, mmode,
+                                     aplic[domain_parent[i]]);
     }
 
-    return kvm_enabled() ? aplic_children[1] : aplic_root;
+    return kvm_enabled() ? aplic[1] : aplic[0];
 }
 
 static void create_platform_bus(RISCVVirtState *s, DeviceState *irqchip)
@@ -1733,10 +1758,10 @@ static void virt_set_domain_count(Object *obj, Visitor *v, const char *name, voi
         return;
     }
 
-    if (value > INTR_DOMAIN_MAX || value < 1) {
+    if (value > IRQ_DOMAIN_MAX || value < 1) {
         error_setg(errp, "Invalid domain-count.");
         error_setg(errp, "domain-count should be in range [1,%d]",
-                   INTR_DOMAIN_MAX);
+                   IRQ_DOMAIN_MAX);
         return;
     }
     s->domain_count = value;
@@ -1760,22 +1785,34 @@ static void virt_set_domain_mode(Object *obj, const char *value, Error **errp)
 {
     RISCVVirtState *s = RISCV_VIRT_MACHINE(obj);
 
+    /* TODO: Add logic to limit no of M and S interrupt domains
+     * allowed to be generated */
     char *mode = strtok((char *)value, "_");
     if (strcmp(mode,"M")) {
         error_setg(errp, "Root domain mode should always be M");
         return;
     }
 
-    uint8_t count = 0;
+    uint8_t count = 0, mcount = 0, scount = 0;
     for (; mode != 0; mode = strtok(NULL, "_")){
         if (!strcmp(mode, "S")) {
             s->domain_mode[count++] = S;
+            mcount++;
         } else if (!strcmp(mode, "M")) {
             s->domain_mode[count++] = M;
+            scount++;
         } else {
             error_setg(errp, "Invalid interrupt domain mode %s",
                        mode);
             error_append_hint(errp, "Valid modes are M or S ONLY.\n");
+            return;
+        }
+
+        if ((mcount > IRQ_DOMAINS_PER_SOCKET) ||
+            (scount > IRQ_DOMAINS_PER_SOCKET)) {
+            error_setg(errp, "Maximum %d each M and S interrrupt domains can"
+                       " exist per socket.",
+                       IRQ_DOMAINS_PER_SOCKET);
             return;
         }
     }
@@ -1784,14 +1821,10 @@ static void virt_set_domain_mode(Object *obj, const char *value, Error **errp)
 static char *virt_get_domain_parent(Object *obj, Error **errp)
 {
     RISCVVirtState *s = RISCV_VIRT_MACHINE(obj);
-
-    /* As INTR_DOMAIN_MAX is 2 digits + sign + , + /0 */
     GString *str = g_string_new("");
 
     for (uint8_t i = 0; i < s->domain_count; i++) {
-        // g_string_append_printf handles the conversion and allocation
         g_string_append_printf(str, "%d", s->domain_parent[i]);
-
         if (i < (s->domain_count - 1)) {
             g_string_append_c(str, ',');
         }
@@ -1931,6 +1964,9 @@ static void virt_machine_class_init(ObjectClass *oc, void *data)
     mc->get_hotplug_handler = virt_machine_get_hotplug_handler;
 
     hc->plug = virt_machine_device_plug_cb;
+
+    /* Ensuring VIRT_APLIC_M and VIRT_APLIC_S regions do not overlap */
+    assert(VIRT_CPUS_MAX * IRQ_DOMAINS_PER_SOCKET <= 0x1000000);
 
     machine_class_allow_dynamic_sysbus_dev(mc, TYPE_RAMFB_DEVICE);
 #ifdef CONFIG_TPM
