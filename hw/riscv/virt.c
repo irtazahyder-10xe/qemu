@@ -610,12 +610,14 @@ static void create_fdt_imsic(RISCVVirtState *s, const MemMapEntry *memmap,
 
 }
 
+// TODO: Fix missing dtb information bug here
 static void create_fdt_one_aplic(RISCVVirtState *s, int socket,
                                  unsigned long aplic_addr, uint32_t aplic_size,
                                  uint32_t msi_phandle,
                                  uint32_t *intc_phandles,
                                  uint32_t aplic_phandle,
-                                 uint32_t aplic_child_phandle,
+                                 uint32_t *aplic_child_phandle,
+                                 uint32_t child_count,
                                  bool m_mode, int num_harts)
 {
     int cpu;
@@ -649,12 +651,30 @@ static void create_fdt_one_aplic(RISCVVirtState *s, int socket,
     qemu_fdt_setprop_cell(ms->fdt, aplic_name, "riscv,num-sources",
                           VIRT_IRQCHIP_NUM_SOURCES);
 
-    if (aplic_child_phandle) {
-        qemu_fdt_setprop_cell(ms->fdt, aplic_name, "riscv,children",
-                              aplic_child_phandle);
-        qemu_fdt_setprop_cells(ms->fdt, aplic_name, "riscv,delegate",
-                               aplic_child_phandle, 0x1,
-                               VIRT_IRQCHIP_NUM_SOURCES);
+    if (child_count > 0) {
+        uint64_t child_prop_arr[child_count * 2];
+        uint64_t delegate_prop_arr[child_count * 6];
+
+        for (int i = 0; i < child_count; i++) {
+            child_prop_arr[2 * i] = 0x1;
+            child_prop_arr[2 * i + 1] = aplic_child_phandle[i];
+
+            /* < {child_phandle first_intr last_intr} > */
+            delegate_prop_arr[6 * i] = 0x1;
+            delegate_prop_arr[6 * i + 1] = aplic_child_phandle[i];
+            delegate_prop_arr[6 * i + 2] = 0x1;
+            delegate_prop_arr[6 * i + 3] = 0x1;
+            delegate_prop_arr[6 * i + 4] = 0x1;
+            delegate_prop_arr[6 * i + 5] = VIRT_IRQCHIP_NUM_SOURCES;
+        }
+        qemu_fdt_setprop_sized_cells_from_array(ms->fdt, aplic_name,
+                                                "riscv,children",
+                                                child_count, child_prop_arr);
+
+        qemu_fdt_setprop_sized_cells_from_array(ms->fdt, aplic_name,
+                                                "riscv,delegate",
+                                                child_count * 3,
+                                                delegate_prop_arr);
     }
 
     riscv_socket_fdt_write_id(ms, aplic_name, socket);
@@ -664,6 +684,24 @@ static void create_fdt_one_aplic(RISCVVirtState *s, int socket,
     g_free(aplic_cells);
 }
 
+static uint8_t get_intr_domain_children(int8_t parent_index,
+                                        uint32_t base_phandle,
+                                        uint32_t *child_phandles,
+                                        int8_t *domain_parent,
+                                        int8_t domain_count)
+{
+    /* Cleaning the array */
+    uint8_t child_index = 0;
+    for (int8_t i = parent_index + 1; i < domain_count; i++) {
+        if (domain_parent[i] == parent_index) {
+            uint32_t phandle = base_phandle + i;
+            child_phandles[child_index++] = phandle;
+        }
+    }
+    return child_index;
+}
+
+/* TODO: Update to generate accurate file tree */
 static void create_fdt_socket_aplic(RISCVVirtState *s,
                                     const MemMapEntry *memmap, int socket,
                                     uint32_t msi_m_phandle,
@@ -674,31 +712,67 @@ static void create_fdt_socket_aplic(RISCVVirtState *s,
                                     int num_harts)
 {
     char *aplic_name;
-    unsigned long aplic_addr;
+    hwaddr aplic_addr, aplic_size;
     MachineState *ms = MACHINE(s);
-    uint32_t aplic_m_phandle, aplic_s_phandle;
+    uint32_t aplic_root_phandle;
+    uint32_t child_phandles[INTR_DOMAIN_MAX], child_count;
 
-    aplic_m_phandle = (*phandle)++;
-    aplic_s_phandle = (*phandle)++;
+    bool msimode = s->aia_type == VIRT_AIA_TYPE_APLIC_IMSIC;
+    uint8_t scount = 0, mcount = 0;
+    uint32_t msi_phandle;
+    bool mmode;
+
+    aplic_root_phandle = (*phandle);
+    *phandle += s->domain_count;
 
     if (!kvm_enabled()) {
         /* M-level APLIC node */
         aplic_addr = memmap[VIRT_APLIC_M].base +
-                     (memmap[VIRT_APLIC_M].size * socket);
+                     socket * memmap[VIRT_APLIC_M].size;
+
+        child_count = get_intr_domain_children(0, aplic_root_phandle,
+                                               child_phandles,
+                                               s->domain_parent,
+                                               s->domain_count);
+
         create_fdt_one_aplic(s, socket, aplic_addr, memmap[VIRT_APLIC_M].size,
-                             msi_m_phandle, intc_phandles,
-                             aplic_m_phandle, aplic_s_phandle,
-                             true, num_harts);
+                             msi_m_phandle, intc_phandles, aplic_root_phandle,
+                             child_phandles, child_count, true, num_harts);
+        mcount++;
     }
 
-    /* S-level APLIC node */
-    aplic_addr = memmap[VIRT_APLIC_S].base +
-                 (memmap[VIRT_APLIC_S].size * socket);
-    create_fdt_one_aplic(s, socket, aplic_addr, memmap[VIRT_APLIC_S].size,
-                         msi_s_phandle, intc_phandles,
-                         aplic_s_phandle, 0,
-                         false, num_harts);
+    /* children APLIC node */
+    for (uint8_t i = 1; i < s->domain_count; i++) {
+        mmode = (s->domain_mode[i] == M);
+        aplic_addr = mmode ?
+            memmap[VIRT_APLIC_M].base + (socket * memmap[VIRT_APLIC_M].size) +
+            ((mcount++) * APLIC_MIN_SIZE):
+            memmap[VIRT_APLIC_S].base + (socket * memmap[VIRT_APLIC_S].size) +
+            ((scount++) * APLIC_MIN_SIZE);
 
+        aplic_size = APLIC_MIN_SIZE;
+        if (!msimode) {
+            if (mmode) {
+                aplic_size = memmap[VIRT_APLIC_M].size;
+            } else {
+                aplic_size = memmap[VIRT_APLIC_S].size;
+            }
+        }
+
+        msi_phandle = mmode ? msi_m_phandle : msi_s_phandle;
+
+        child_count = get_intr_domain_children(i, aplic_root_phandle,
+                                               child_phandles,
+                                               s->domain_parent,
+                                               s->domain_count);
+
+        create_fdt_one_aplic(s, socket, aplic_addr, aplic_size,
+                             msi_phandle, intc_phandles,
+                             aplic_root_phandle + i, child_phandles,
+                             child_count, mmode, num_harts);
+    }
+
+    /* Why does platform bus take the leaf domain's address? */
     aplic_name = g_strdup_printf("/soc/aplic@%lx", aplic_addr);
 
     if (!socket) {
@@ -707,10 +781,9 @@ static void create_fdt_socket_aplic(RISCVVirtState *s,
                                        memmap[VIRT_PLATFORM_BUS].size,
                                        VIRT_PLATFORM_BUS_IRQ);
     }
-
     g_free(aplic_name);
 
-    aplic_phandles[socket] = aplic_s_phandle;
+    aplic_phandles[socket] = aplic_root_phandle + 1;
 }
 
 static void create_fdt_pmu(RISCVVirtState *s)
