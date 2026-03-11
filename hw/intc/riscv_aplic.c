@@ -348,10 +348,14 @@ static void riscv_aplic_msi_send(RISCVAPLICState *aplic,
     uint32_t lhxs, lhxw, hhxs, hhxw, group_idx, msicfgaddr, msicfgaddrH;
 
     aplic_m = aplic;
-    while (aplic_m && !aplic_m->mmode) {
+    /**
+     * Due to the change in children logic,
+     * we keep iterating until aplic_m->parent == NULL
+     */
+    while (aplic_m && aplic_m->parent) {
         aplic_m = aplic_m->parent;
     }
-    if (!aplic_m) {
+    if (!aplic_m || !aplic_m->mmode) {
         qemu_log_mask(LOG_GUEST_ERROR, "%s: m-level APLIC not found\n",
                       __func__);
         return;
