@@ -24,11 +24,13 @@
 #include "hw/sysbus.h"
 #include "hw/block/flash.h"
 
-#define VIRT_CPUS_MAX_BITS             7
+#define VIRT_CPUS_MAX_BITS             9
+#define VIRT_CPUS_MAX_BITS_IMSIC_APLIC 7
 #define VIRT_CPUS_MAX                  (1 << VIRT_CPUS_MAX_BITS)
 #define VIRT_SOCKETS_MAX_BITS          2
 #define VIRT_SOCKETS_MAX               (1 << VIRT_SOCKETS_MAX_BITS)
-#define IRQ_DOMAIN_MAX                16
+#define IRQ_DOMAIN_MAX                 (2 << (VIRT_CPUS_MAX_BITS - \
+                                        VIRT_CPUS_MAX_BITS_IMSIC_APLIC))
 
 #define TYPE_RISCV_VIRT_MACHINE MACHINE_TYPE_NAME("virt")
 typedef struct RISCVVirtState RISCVVirtState;
@@ -42,8 +44,8 @@ typedef enum RISCVVirtAIAType {
 } RISCVVirtAIAType;
 
 typedef enum RISCVVirtIntrDomainType {
-    S = 1,
-    M = 3,
+    MIRQ_DOMAIN,
+    SIRQ_DOMAIN
 } RISCVVirtIntrDomainType;
 
 struct RISCVVirtState {
