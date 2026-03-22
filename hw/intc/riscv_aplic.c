@@ -174,7 +174,6 @@ static bool riscv_aplic_irq_rectified_val(RISCVAPLICState *aplic,
     }
 
     sm = sourcecfg & APLIC_SOURCECFG_SM_MASK;
-    // BUG: Does not deal with APLIC_SOURCECFG_SM_DETACH
     if (sm == APLIC_SOURCECFG_SM_INACTIVE) {
         return false;
     }
@@ -361,22 +360,30 @@ static void riscv_aplic_msi_send(RISCVAPLICState *aplic,
         return;
     }
 
-    if (aplic->mmode) {
-        msicfgaddr = aplic_m->mmsicfgaddr;
-        msicfgaddrH = aplic_m->mmsicfgaddrH;
-    } else {
-        msicfgaddr = aplic_m->smsicfgaddr;
-        msicfgaddrH = aplic_m->smsicfgaddrH;
-    }
+    /**
+     * BUG: Fields lhxw, hhxs and hhxw are always taken from mmsicfgaddrH
+     * not smsicfgaddrH
+     */
 
-    lhxs = (msicfgaddrH >> APLIC_xMSICFGADDRH_LHXS_SHIFT) &
-            APLIC_xMSICFGADDRH_LHXS_MASK;
+    /* These are taken from the root M domain mmsicfgaddrh MMR */
+    msicfgaddrH = aplic_m->mmsicfgaddrH;
     lhxw = (msicfgaddrH >> APLIC_xMSICFGADDRH_LHXW_SHIFT) &
             APLIC_xMSICFGADDRH_LHXW_MASK;
     hhxs = (msicfgaddrH >> APLIC_xMSICFGADDRH_HHXS_SHIFT) &
             APLIC_xMSICFGADDRH_HHXS_MASK;
     hhxw = (msicfgaddrH >> APLIC_xMSICFGADDRH_HHXW_SHIFT) &
             APLIC_xMSICFGADDRH_HHXW_MASK;
+
+    /* The base PPN and LHXS depend on msi mode */
+    if (aplic->mmode) {
+        msicfgaddr = aplic_m->mmsicfgaddr;
+    } else {
+        msicfgaddrH = aplic_m->smsicfgaddrH;
+        msicfgaddr = aplic_m->smsicfgaddr;
+    }
+
+    lhxs = (msicfgaddrH >> APLIC_xMSICFGADDRH_LHXS_SHIFT) &
+            APLIC_xMSICFGADDRH_LHXS_MASK;
 
     group_idx = hart_idx >> lhxw;
     hart_idx &= APLIC_xMSICFGADDR_PPN_LHX_MASK(lhxw);
@@ -385,9 +392,14 @@ static void riscv_aplic_msi_send(RISCVAPLICState *aplic,
     addr |= ((uint64_t)(msicfgaddrH & APLIC_xMSICFGADDRH_BAPPN_MASK)) << 32;
     addr |= ((uint64_t)(group_idx & APLIC_xMSICFGADDR_PPN_HHX_MASK(hhxw))) <<
              APLIC_xMSICFGADDR_PPN_HHX_SHIFT(hhxs);
-    addr |= ((uint64_t)(hart_idx & APLIC_xMSICFGADDR_PPN_LHX_MASK(lhxw))) <<
-             APLIC_xMSICFGADDR_PPN_LHX_SHIFT(lhxs);
-    addr |= (uint64_t)(guest_idx & APLIC_xMSICFGADDR_PPN_HART(lhxs));
+    /* Remove reptitive mask */
+    addr |= (uint64_t) hart_idx << APLIC_xMSICFGADDR_PPN_LHX_SHIFT(lhxs);
+    /**
+     * BUG: Does not match the specification requirement. In specification
+     * guest_index is directly ORed with address, without requiring any sort
+     * of mask.
+     */
+    addr |= (uint64_t) guest_idx;
     addr <<= APLIC_xMSICFGADDR_PPN_SHIFT;
 
     address_space_stl_le(&address_space_memory, addr,
@@ -401,10 +413,37 @@ static void riscv_aplic_msi_send(RISCVAPLICState *aplic,
 
 static void riscv_aplic_msi_irq_update(RISCVAPLICState *aplic, uint32_t irq)
 {
-    uint32_t hart_idx, guest_idx, eiid;
+    uint32_t hart_idx, guest_idx, eiid, sourcecfg;
+    RISCVAPLICState *root_aplic = aplic;
 
-    if (!aplic->msimode || (aplic->num_irqs <= irq) ||
-        !(aplic->domaincfg & APLIC_DOMAINCFG_IE)) {
+    /**
+     * BUG: Raw writes from children aplic are possible even when the APLIC
+     * might not delegate the given interrupt to the current aplic.
+     *
+     * Always starting from root aplic as that is where all interrupts are
+     * delegated. Only interrupts with valid paths are set.
+     */
+    while (root_aplic && root_aplic->parent) {
+        root_aplic = root_aplic->parent;
+    }
+
+    /**
+     * Going to the interrupt domain pointed by the sourcecfg registers.
+     *
+     * As all interrupts srcs always go the root domain first, the traversal
+     * is required from finding where the irq is currently delegated.
+     */
+    aplic = root_aplic;
+    while (aplic && ((sourcecfg = aplic->sourcecfg[irq]) & APLIC_SOURCECFG_D)) {
+        if (!aplic->msimode || (aplic->num_irqs <= irq) ||
+            !(aplic->domaincfg & APLIC_DOMAINCFG_IE)) {
+            return;
+        }
+
+        aplic = aplic->children[sourcecfg & APLIC_SOURCECFG_CHILDIDX_MASK];
+    }
+
+    if (!aplic) {
         return;
     }
 
@@ -597,10 +636,18 @@ static uint64_t riscv_aplic_read(void *opaque, hwaddr addr, unsigned size)
         return aplic->sourcecfg[irq];
     } else if (aplic->mmode && aplic->msimode &&
                (addr == APLIC_MMSICFGADDR)) {
-        return aplic->mmsicfgaddr;
+        /**
+         * BUG: Should be readonly of the parent's value or 0x80000000 for
+         * child domains.
+         */
+        return !aplic->parent ? aplic->mmsicfgaddr : 0x80000000;
     } else if (aplic->mmode && aplic->msimode &&
                (addr == APLIC_MMSICFGADDRH)) {
-        return aplic->mmsicfgaddrH;
+        /**
+         * BUG: Should be readonly of the parent's value or 0x80000000 for
+         * child domains
+         */
+        return !aplic->parent ? aplic->mmsicfgaddr : 0x80000000;
     } else if (aplic->mmode && aplic->msimode &&
                (addr == APLIC_SMSICFGADDR)) {
         /*
@@ -612,9 +659,21 @@ static uint64_t riscv_aplic_read(void *opaque, hwaddr addr, unsigned size)
          *     only zero in at least one of the supervisor-level child
          * domains).
          */
+        /**
+         * BUG: should not exist for m mode children
+         * NOTE: The changes in writing to these registers in non-root
+         * domains will always result in these registers having readonly
+         * zeros.
+         */
         return (aplic->num_children) ? aplic->smsicfgaddr : 0;
     } else if (aplic->mmode && aplic->msimode &&
                (addr == APLIC_SMSICFGADDRH)) {
+        /**
+         * BUG: should not exist for m mode children
+         * NOTE: The changes in writing to these registers in non-root
+         * domains will always result in these registers having readonly
+         * zeros.
+         */
         return (aplic->num_children) ? aplic->smsicfgaddrH : 0;
     } else if ((APLIC_SETIP_BASE <= addr) &&
             (addr < (APLIC_SETIP_BASE + aplic->bitfield_words * 4))) {
@@ -711,17 +770,19 @@ static void riscv_aplic_write(void *opaque, hwaddr addr, uint64_t value,
                 riscv_aplic_set_pending_raw(aplic, irq, true);
             }
         }
-    } else if (aplic->mmode && aplic->msimode &&
+    } else if (!aplic->parent && aplic->mmode && aplic->msimode &&
                (addr == APLIC_MMSICFGADDR)) {
+        /* BUG: Should only be allowed to be set in parent Machine domain */
         if (!(aplic->mmsicfgaddrH & APLIC_xMSICFGADDRH_L)) {
             aplic->mmsicfgaddr = value;
         }
-    } else if (aplic->mmode && aplic->msimode &&
+    } else if (!aplic->parent && aplic->mmode && aplic->msimode &&
                (addr == APLIC_MMSICFGADDRH)) {
+        /* BUG: Should only be allowed to be set in parent Machine domain */
         if (!(aplic->mmsicfgaddrH & APLIC_xMSICFGADDRH_L)) {
             aplic->mmsicfgaddrH = value & APLIC_xMSICFGADDRH_VALID_MASK;
         }
-    } else if (aplic->mmode && aplic->msimode &&
+    } else if (!aplic->parent && aplic->mmode && aplic->msimode &&
                (addr == APLIC_SMSICFGADDR)) {
         /*
          * Registers SMSICFGADDR and SMSICFGADDRH are implemented only if:
@@ -732,15 +793,20 @@ static void riscv_aplic_write(void *opaque, hwaddr addr, uint64_t value,
          *     only zero in at least one of the supervisor-level child
          * domains).
          */
+        /* BUG: Should only be allowed to be set in parent Machine domain */
         if (aplic->num_children &&
             !(aplic->mmsicfgaddrH & APLIC_xMSICFGADDRH_L)) {
             aplic->smsicfgaddr = value;
         }
-    } else if (aplic->mmode && aplic->msimode &&
+    } else if (!aplic->parent && aplic->mmode && aplic->msimode &&
                (addr == APLIC_SMSICFGADDRH)) {
+        /* BUG: Should only be allowed to be set in parent Machine domain */
         if (aplic->num_children &&
             !(aplic->mmsicfgaddrH & APLIC_xMSICFGADDRH_L)) {
-            aplic->smsicfgaddrH = value & APLIC_xMSICFGADDRH_VALID_MASK;
+            /* BUG: smicfgaddr only has LHXS writable, all others are zeros */
+            aplic->smsicfgaddrH = value & ((APLIC_xMSICFGADDRH_LHXS_MASK <<
+                                            APLIC_xMSICFGADDRH_LHXS_SHIFT) |
+                                            APLIC_xMSICFGADDRH_BAPPN_MASK);
         }
     } else if ((APLIC_SETIP_BASE <= addr) &&
             (addr < (APLIC_SETIP_BASE + aplic->bitfield_words * 4))) {
