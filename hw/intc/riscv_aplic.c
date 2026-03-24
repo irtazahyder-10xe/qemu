@@ -551,6 +551,21 @@ static uint32_t riscv_aplic_idc_claimi(RISCVAPLICState *aplic, uint32_t idc)
     return topi;
 }
 
+
+static bool riscv_aplic_smode_child_DFS(RISCVAPLICState *aplic) {
+    /* Searching for any S domain children using DFS */
+    if (!aplic->mmode) {
+        return true;
+    }
+
+    for (int i = 0; i < aplic->num_children; i++) {
+        if (riscv_aplic_smode_child_DFS(aplic->children[i])) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void riscv_aplic_request(void *opaque, int irq, int level)
 {
     bool update = false;
@@ -637,17 +652,19 @@ static uint64_t riscv_aplic_read(void *opaque, hwaddr addr, unsigned size)
     } else if (aplic->mmode && aplic->msimode &&
                (addr == APLIC_MMSICFGADDR)) {
         /**
-         * BUG: Should be readonly of the parent's value or 0x80000000 for
-         * child domains.
+         * BUG: Should be readonly of the parent's value or 0 for
+         * child domains and for root domain if bit L is set.
          */
-        return !aplic->parent ? aplic->mmsicfgaddr : 0x80000000;
+        return (!aplic->parent && !(aplic->mmsicfgaddrH & APLIC_xMSICFGADDRH_L))
+                ? aplic->mmsicfgaddr : 0;
     } else if (aplic->mmode && aplic->msimode &&
                (addr == APLIC_MMSICFGADDRH)) {
         /**
-         * BUG: Should be readonly of the parent's value or 0x80000000 for
-         * child domains
+         * BUG: Should be readonly of the parent's value or 0x80000000
+         * for child domains and for root domains if bit L is set.
          */
-        return !aplic->parent ? aplic->mmsicfgaddr : 0x80000000;
+        return (!aplic->parent && !(aplic->mmsicfgaddrH & APLIC_xMSICFGADDRH_L))
+                ? aplic->mmsicfgaddrH : APLIC_xMSICFGADDRH_L;
     } else if (aplic->mmode && aplic->msimode &&
                (addr == APLIC_SMSICFGADDR)) {
         /*
@@ -658,9 +675,7 @@ static uint64_t riscv_aplic_read(void *opaque, hwaddr addr, unsigned size)
          *     that support MSI delivery mode (domaincfg.DM is not read-
          *     only zero in at least one of the supervisor-level child
          * domains).
-         */
-        /**
-         * BUG: should not exist for m mode children
+         *
          * NOTE: The changes in writing to these registers in non-root
          * domains will always result in these registers having readonly
          * zeros.
@@ -670,6 +685,8 @@ static uint64_t riscv_aplic_read(void *opaque, hwaddr addr, unsigned size)
                (addr == APLIC_SMSICFGADDRH)) {
         /**
          * BUG: should not exist for m mode children
+         * BUG: Should check if a supervisor child exists. If only Machine
+         *      Domain children this should be 0.
          * NOTE: The changes in writing to these registers in non-root
          * domains will always result in these registers having readonly
          * zeros.
@@ -783,7 +800,8 @@ static void riscv_aplic_write(void *opaque, hwaddr addr, uint64_t value,
             aplic->mmsicfgaddrH = value & APLIC_xMSICFGADDRH_VALID_MASK;
         }
     } else if (!aplic->parent && aplic->mmode && aplic->msimode &&
-               (addr == APLIC_SMSICFGADDR)) {
+               (addr == APLIC_SMSICFGADDR) &&
+               riscv_aplic_smode_child_DFS(aplic)) {
         /*
          * Registers SMSICFGADDR and SMSICFGADDRH are implemented only if:
          * (a) the interrupt domain is at machine level
@@ -793,16 +811,21 @@ static void riscv_aplic_write(void *opaque, hwaddr addr, uint64_t value,
          *     only zero in at least one of the supervisor-level child
          * domains).
          */
-        /* BUG: Should only be allowed to be set in parent Machine domain */
-        if (aplic->num_children &&
-            !(aplic->mmsicfgaddrH & APLIC_xMSICFGADDRH_L)) {
+
+        /* BUG: Should only be allowed to be set in parent Machine domain
+         *
+         * BUG: (c) did not take into account if all children were from
+         * M domain or not. Implement a new function which searches for S domain
+         * children.
+         */
+        if (!(aplic->mmsicfgaddrH & APLIC_xMSICFGADDRH_L)) {
             aplic->smsicfgaddr = value;
         }
     } else if (!aplic->parent && aplic->mmode && aplic->msimode &&
-               (addr == APLIC_SMSICFGADDRH)) {
+               (addr == APLIC_SMSICFGADDRH) &&
+               riscv_aplic_smode_child_DFS(aplic)) {
         /* BUG: Should only be allowed to be set in parent Machine domain */
-        if (aplic->num_children &&
-            !(aplic->mmsicfgaddrH & APLIC_xMSICFGADDRH_L)) {
+        if (!(aplic->mmsicfgaddrH & APLIC_xMSICFGADDRH_L)) {
             /* BUG: smicfgaddr only has LHXS writable, all others are zeros */
             aplic->smsicfgaddrH = value & ((APLIC_xMSICFGADDRH_LHXS_MASK <<
                                             APLIC_xMSICFGADDRH_LHXS_SHIFT) |

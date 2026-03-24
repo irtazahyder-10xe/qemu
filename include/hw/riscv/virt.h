@@ -32,6 +32,9 @@
 #define IRQ_DOMAIN_MAX                 (2 << (VIRT_CPUS_MAX_BITS - \
                                         VIRT_CPUS_MAX_BITS_IMSIC_APLIC))
 
+#define MIRQ_DOMAINS_PER_SOCKET_MAX        4
+#define SIRQ_DOMAINS_PER_SOCKET_MAX        4
+
 #define TYPE_RISCV_VIRT_MACHINE MACHINE_TYPE_NAME("virt")
 typedef struct RISCVVirtState RISCVVirtState;
 DECLARE_INSTANCE_CHECKER(RISCVVirtState, RISCV_VIRT_MACHINE,
