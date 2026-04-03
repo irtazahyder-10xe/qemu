@@ -1,4 +1,5 @@
 #include "qemu/osdep.h"
+#include "qapi/error.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "qemu/error-report.h"
@@ -141,7 +142,8 @@ static const MemoryRegionOps riscv_msirem_ops = {
     }
 };
 
-static void riscv_msirem_realize(DeviceState *dev, Error **errp) {
+static void riscv_msirem_realize(DeviceState *dev, Error **errp)
+{
     RISCVMSIRemState *msirem = RISCV_MSIREM(dev);
 
     /**
@@ -171,13 +173,18 @@ static void riscv_msirem_realize(DeviceState *dev, Error **errp) {
     sysbus_init_mmio(SYS_BUS_DEVICE(dev), &msirem->mmio);
 }
 
-static void riscv_msirem_unrealize(DeviceState *dev) {
+static void riscv_msirem_unrealize(DeviceState *dev)
+{
 }
 
-static void riscv_msirem_instance_init (Object *o) {
+static void riscv_msirem_instance_init (Object *o)
+{
+    RISCVMSIRemState *s = RISCV_MSIREM(o);
+    s->version = 0x10;
 }
 
-static void riscv_msirem_class_init (ObjectClass *class, void *data) {
+static void riscv_msirem_class_init (ObjectClass *class, void *data)
+{
     DeviceClass *dc = DEVICE_CLASS(class);
 
     dc->realize = riscv_msirem_realize;
@@ -191,3 +198,12 @@ static const TypeInfo riscv_msirem_info = {
     .instance_init = riscv_msirem_instance_init,
     .class_init = riscv_msirem_class_init
 };
+
+DeviceState *riscv_msirem_create(hwaddr addr)
+{
+    DeviceState *dev = qdev_new(TYPE_RISCV_MSIREM);
+
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, addr);
+    return dev;
+}

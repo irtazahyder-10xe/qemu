@@ -84,5 +84,4 @@ typedef struct PTE {
     uint8_t priv;
 } PTE;
 
-/* TODO: Make this function */
-DeviceState *riscv_msirem_create();
+DeviceState *riscv_msirem_create(hwaddr addr);
