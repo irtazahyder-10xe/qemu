@@ -184,6 +184,9 @@
 #define CSR_MVIEN           0x308
 #define CSR_MVIP            0x309
 
+/* Machine-Level MSI Remapper base CSR (MSI Remapper) */
+#define CSR_MMSIREMBASE     0x7C0
+
 /* Machine-Level High-Half CSRs (AIA) */
 #define CSR_MIDELEGH        0x313
 #define CSR_MIEH            0x314

@@ -2559,6 +2559,21 @@ static RISCVException rmw_mvip(CPURISCVState *env, int csrno,
     return ret;
 }
 
+static RISCVException rmw_mmsirembase(CPURISCVState *env, int csrno,
+                                      target_ulong *ret_val,
+                                      target_ulong new_val,
+                                      target_ulong wr_mask)
+{
+    if (ret_val) {
+        *ret_val = env->mmsirembase;
+    }
+    if (wr_mask) {
+        new_val &= wr_mask;
+        env->mmsirembase = new_val;
+    }
+    return RISCV_EXCP_NONE;
+}
+
 static RISCVException rmw_mviph(CPURISCVState *env, int csrno,
                                target_ulong *ret_val,
                                target_ulong new_val, target_ulong wr_mask)
@@ -4560,6 +4575,9 @@ riscv_csr_operations csr_ops[CSR_TABLE_SIZE] = {
     /* Virtual Interrupts for Supervisor Level (AIA) */
     [CSR_MVIEN]    = { "mvien",    aia_any, NULL, NULL, rmw_mvien   },
     [CSR_MVIP]     = { "mvip",     aia_any, NULL, NULL, rmw_mvip    },
+
+    /* Machine-Level MSI Remapper base CSR (MSI Remapper) */
+    [CSR_MMSIREMBASE] = { "mmsirembase", any, NULL, NULL, rmw_mmsirembase },
 
     /* Machine-Level High-Half CSRs (AIA) */
     [CSR_MIDELEGH] = { "midelegh", aia_any32, NULL, NULL, rmw_midelegh },
