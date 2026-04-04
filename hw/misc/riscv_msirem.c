@@ -11,7 +11,9 @@
 #include "qemu/error-report.h"
 #include "migration/vmstate.h"
 #include "hw/qdev-properties.h"
+#include "hw/qdev-properties-system.h"
 #include "qemu/event_notifier.h"
+#include "qapi/visitor.h"
 #include "hw/misc/riscv_msirem.h"
 #include "qemu/main-loop.h"
 
@@ -108,18 +110,21 @@
 #define DOORBELL_MSI_MASK       ((1ULL << 32) - 1)
 
 /* TODO: Add logic to send msi */
-static void riscv_msirem_send_msi(RISCVMSIRemState *s){
+static void riscv_msirem_send_msi(RISCVMSIRemState *s)
+{
     return;
 }
 
 /* Timer functions */
-static void reset_timer(RISCVMSIRemState *s) {
+static void reset_timer(RISCVMSIRemState *s)
+{
     if (s->coalesce_ns > 0) {
         timer_mod_ns(&s->cb_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + s->coalesce_ns);
     }
 }
 
-static void cb_send_msi(void *opaque){
+static void cb_send_msi(void *opaque)
+{
     RISCVMSIRemState *s = RISCV_MSIREM(opaque);
     /* TODO: Add logic to send all msi's curerntly in coalescing buffer */
     for (uint64_t i = 0; i < s->coalesce_max; i++) {
@@ -132,7 +137,8 @@ static void cb_send_msi(void *opaque){
  * Fault subsystem
  */
 
-static void fault_sb_to_DRAM(void *opaque) {
+static void fault_sb_to_DRAM(void *opaque)
+{
     MemTxResult res = MEMTX_OK;
     RISCVMSIRemState *s = RISCV_MSIREM(opaque);
     hwaddr addr;
@@ -141,7 +147,7 @@ static void fault_sb_to_DRAM(void *opaque) {
 
     qsize = (s->flbr >> FLBR_QSIZE_SHIFT) & FLBR_QSIZE_MASK;
     qsize_mask = (1 << qsize) - 1;
-    next_flhead = (s->internal_flhead + 1) & (qsize_mask | (0x1 << qsize));
+    next_flhead = s->flhead + 1;
 
     /* Checking if there is a difference of 1 entry between next flhead and
      * current fltail. Otherwise DRAM ring buffer full, so not write to DRAM */
@@ -162,7 +168,6 @@ static void fault_sb_to_DRAM(void *opaque) {
             /* This should never fail */
             if (res == MEMTX_OK) {
                 f = g_queue_pop_head(s->staging_buffer);
-                s->internal_flhead = next_flhead;
                 s->flhead = next_flhead & qsize_mask;
                 g_free(f);
             }
@@ -170,14 +175,16 @@ static void fault_sb_to_DRAM(void *opaque) {
     }
 }
 
-static void fault_subsystem_init(RISCVMSIRemState *s) {
+static void fault_subsystem_init(RISCVMSIRemState *s)
+{
     s->staging_buffer = g_queue_new();
     /* Scheduling write from staging buffer -> DRAM to bottom half */
     s->staging_buffer_bh = qemu_bh_new(fault_sb_to_DRAM, s);
 }
 
 static void fault_logger(RISCVMSIRemState *s, uint8_t fault_code,
-                         uint32_t msi_data) {
+                         uint32_t msi_data)
+{
     FaultLog *f = g_new(FaultLog, 1);
     f->fault_info = ((uint64_t) msi_data << 32) | fault_code;
     f->timestamp_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
@@ -362,13 +369,89 @@ static void riscv_msirem_unrealize(DeviceState *dev)
     g_queue_free(s->staging_buffer);
 }
 
+static Property riscv_msirem_properties[] = {
+    DEFINE_PROP_UINT64("coalescing_window_timeout", RISCVMSIRemState, coalesce_ns, 0),
+    DEFINE_PROP_UINT64("coalescing_window_size", RISCVMSIRemState, coalesce_max, 64),
+    DEFINE_PROP_CHR("debug-logger", RISCVMSIRemState, debug_logger),
+    DEFINE_PROP_END_OF_LIST()
+};
+
+static VMStateDescription vmstate_riscv_msirem = {
+    .name = TYPE_RISCV_MSIREM,
+    .version_id = 0x10,
+    .minimum_version_id = 0x10,
+    .fields = (VMStateField[]) {
+        VMSTATE_UINT64(ptbr, RISCVMSIRemState),
+        VMSTATE_UINT64(flbr, RISCVMSIRemState),
+        VMSTATE_UINT64(flqc, RISCVMSIRemState),
+        VMSTATE_UINT64(flhead, RISCVMSIRemState),
+        VMSTATE_UINT64(fltail, RISCVMSIRemState),
+        VMSTATE_UINT64(status, RISCVMSIRemState),
+        VMSTATE_UINT64(ctrl, RISCVMSIRemState),
+        VMSTATE_UINT64(imsic_base, RISCVMSIRemState),
+        VMSTATE_UINT64(imsic_stride, RISCVMSIRemState),
+        VMSTATE_UINT64(imsic_priv_off, RISCVMSIRemState),
+        VMSTATE_UINT64(fault_inj, RISCVMSIRemState),
+        VMSTATE_UINT64(perf_ctr, RISCVMSIRemState),
+        VMSTATE_UINT64(perf_fault, RISCVMSIRemState),
+        VMSTATE_UINT64(last_msi, RISCVMSIRemState),
+        VMSTATE_UINT64(version, RISCVMSIRemState),
+        VMSTATE_UINT64(coalesce_ns, RISCVMSIRemState),
+        VMSTATE_UINT64(coalesce_max, RISCVMSIRemState),
+        VMSTATE_UINT64(notif_ctrl, RISCVMSIRemState),
+        VMSTATE_UINT64(chardev_ctrl, RISCVMSIRemState),
+        VMSTATE_UINT64(trace_mask, RISCVMSIRemState),
+        VMSTATE_UINT64(bh_pending, RISCVMSIRemState),
+        VMSTATE_UINT64(hotplug_seq, RISCVMSIRemState),
+        VMSTATE_UINT64(doorbell, RISCVMSIRemState),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static void riscv_msirem_instance_init (Object *obj)
 {
     RISCVMSIRemState *s = RISCV_MSIREM(obj);
     timer_init_ns(&s->cb_timer, QEMU_CLOCK_VIRTUAL, cb_send_msi, s);
     s->version = 0x10;
-
     fault_subsystem_init(s);
+}
+
+static void riscv_msirem_get_pgtb_count(Object *obj, Visitor *v,
+                                        const char *name, void *opaque,
+                                        Error **errp)
+{
+    RISCVMSIRemState *s = RISCV_MSIREM(obj);
+    uint64_t value = s->total_pgtb_walk;
+    visit_type_uint64(v, name, &value, errp);
+}
+
+static char *riscv_msirem_get_trans_mode(Object *obj, Error **errp)
+{
+    RISCVMSIRemState *s = RISCV_MSIREM(obj);
+    uint8_t value = (uint8_t) (s->ptbr & PTBR_MDOE_MASK);
+    const char *val;
+
+    switch (value) {
+        case 0:
+            val = "OFF";
+            break;
+        case 1:
+            val = "BARE";
+            break;
+        case 2:
+            val = "REMAP-1";
+            break;
+        case 3:
+            val = "REMAP-2";
+            break;
+        case 4:
+            val = "REMAP-3";
+            break;
+        default:
+            val = "Reserved (Defaulting to Bare)";
+    }
+
+    return g_strdup(val);
 }
 
 static void riscv_msirem_class_init (ObjectClass *class, void *data)
@@ -376,8 +459,19 @@ static void riscv_msirem_class_init (ObjectClass *class, void *data)
     DeviceClass *dc = DEVICE_CLASS(class);
 
     dc->realize = riscv_msirem_realize;
-    dc->desc = "MSI Remapper";
+    dc->desc = "MSI Remapper, performs MSI translation via page tables";
     dc->unrealize = riscv_msirem_unrealize;
+    dc->vmsd = &vmstate_riscv_msirem;
+    device_class_set_props(dc, riscv_msirem_properties);
+
+    /* Dynamic properties, these are read only properties for now.
+     * By introducing a setter callback, we can also set these properties
+     * but that not make sense for these properties */
+    object_class_property_add(class, "walk-count", "uint64_t",
+                              riscv_msirem_get_pgtb_count,
+                              NULL, NULL, NULL);
+    object_class_property_add_str(class, "mode-name",
+                                  riscv_msirem_get_trans_mode, NULL);
 }
 
 static const TypeInfo riscv_msirem_info = {

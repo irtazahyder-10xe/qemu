@@ -35,14 +35,11 @@ struct RISCVMSIRemState {
     QEMUTimer cb_timer;         /*< Coalescing Buffer timer */
 
     QemuMutex ptb_mutex;        /*< Page Table Mutex for RCU */
-
     Notifier powerdown;
 
-    CharBackend debug_log;
+    CharBackend debug_logger;
 
-    /* Internal is always 1 bit more than their counterpart */
-    uint64_t internal_flhead;
-    // uint64_t internal_fltail;
+    uint64_t total_pgtb_walk;
 
     /*< public >*/
     MemoryRegion mmio;
