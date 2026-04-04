@@ -1,17 +1,75 @@
 #include "qemu/osdep.h"
-#include "qapi/error.h"
-#include "qemu/log.h"
-#include "qemu/module.h"
-#include "qemu/error-report.h"
-#include "qemu/timer.h"
-#include "qemu/event_notifier.h"
-#include "hw/qdev-properties.h"
-#include "hw/sysbus.h"
-#include "hw/irq.h"
-#include "hw/misc/riscv_msirem.h"
-#include "migration/vmstate.h"
-#include "qom/object.h"
 #include "trace.h"
+#include "hw/irq.h"
+#include "qemu/log.h"
+#include "hw/sysbus.h"
+#include "qapi/error.h"
+#include "qom/object.h"
+#include "qemu/timer.h"
+#include "qemu/module.h"
+#include "exec/address-spaces.h"
+#include "qemu/error-report.h"
+#include "migration/vmstate.h"
+#include "hw/qdev-properties.h"
+#include "qemu/event_notifier.h"
+#include "hw/misc/riscv_msirem.h"
+#include "qemu/main-loop.h"
+
+#define MSIREMAP_PTBR           0x000
+#define PTBR_PPN_MASK           ((1ULL << (51 - 8 + 1)) - 1)
+#define PTBR_PPN_SHIFT          8
+#define PTBR_MDOE_MASK          0xF
+
+#define MSIREMAP_FLBR           0x008
+#define FLBR_QSIZE_MASK         0x1F
+#define FLBR_QSIZE_SHIFT        52
+#define FLBR_PPN_MASK           PTBR_PPN_MASK
+#define FLBR_PPN_SHIFT          PTBR_PPN_SHIFT
+
+#define MSIREMAP_FLQC           0x010
+#define FLQC_IRQEN              (1 << 3)
+#define FLQC_CLR                (1 << 2)
+#define FLQC_OFLOW_CLR          (1 << 1)
+#define FLQC_EN                 0x1
+
+#define MSIREMAP_FLHEAD         0x018
+#define FLHEAD_MASK             ((1ULL << 32) - 1)
+
+#define MSIREMAP_FLTAIL         0x020
+#define FLTAIL_MASK             ((1ULL << 32) - 1)
+
+#define MSIREMAP_STATUS         0x028
+#define STATUS_OFLOW            (1 << 7)
+#define STATUS_FAULT            (1 << 6)
+#define STATUS_BUSY             (1 << 5)
+#define STATUS_QFULL            (1 << 4)
+#define STATUS_QEMPTY           (1 << 3)
+
+#define MSIREMAP_CTRL           0x030
+#define CTRL_TEST_MODE          (1 << 7)
+#define CTRL_PERF_RST           (1 << 6)
+#define CTRL_FAULT_CLR          (1 << 5)
+#define CTRL_SOFT_RST           (1 << 4)
+#define CTRL_FAULT_IRQEN        (1 << 1)
+#define CTRL_EN                 0x1
+
+#define MSIREMAP_IMSIC_BASE     0x038
+#define IMSIC_BASE_MASK         ((1ULL << 56) - 1)
+
+#define MSIREMAP_IMSIC_STRIDE   0x040
+#define IMSIC_STRIDE_MASK       ((1ULL << 12) - 1)
+
+#define MSIREMAP_IMSIC_PRIV_OFF 0x048
+#define IMSIC_PRIV_OFF_MASK     ((1ULL << 12) - 1)
+
+#define MSIREMAP_FAULT_INJ      0x050
+#define FAULT_INJ_CODE_MASK     ((1ULL << 8) - 1)
+
+#define MSIREMAP_PERF_CTR       0x058
+#define PERF_CTR_COUNT_MASK     ((1ULL << 32) - 1)
+
+#define MSIREMAP_PERF_FAULT     0x060
+#define PERF_FAULT_COUNT_MASK   ((1ULL << 32) - 1)
 
 
 static uint64_t riscv_msirem_read(void *opaque, hwaddr addr, unsigned size)
@@ -23,47 +81,47 @@ static uint64_t riscv_msirem_read(void *opaque, hwaddr addr, unsigned size)
     RISCVMSIRemState *msirem = RISCV_MSIREM(opaque);
 
     switch (addr) {
-        case 0x000:
+        case MSIREMAP_PTBR:
             return msirem->ptbr;
-        case 0x008:
+        case MSIREMAP_FLBR:
             return msirem->flbr;
-        case 0x010:
+        case MSIREMAP_FLQC:
             return msirem->flqc;
-        case 0x018:
+        case MSIREMAP_FLHEAD:
             return msirem->flhead;
-        case 0x020:
+        case MSIREMAP_FLTAIL:
             return msirem->fltail;
-        case 0x028:
+        case MSIREMAP_STATUS:
             return msirem->status;
-        case 0x030:
+        case MSIREMAP_CTRL:
             return msirem->ctrl;
-        case 0x038:
+        case MSIREMAP_IMSIC_BASE:
             return msirem->imsic_base;
-        case 0x040:
+        case MSIREMAP_IMSIC_STRIDE:
             return msirem->imsic_stride;
-        case 0x048:
+        case MSIREMAP_IMSIC_PRIV_OFF:
             return msirem->imsic_priv_off;
-        case 0x058:
+        case MSIREMAP_PERF_CTR:
             return msirem->perf_ctr;
-        case 0x060:
+        case MSIREMAP_PERF_FAULT:
             return msirem->perf_fault;
-        case 0x068:
+        case MSIREMAP_LAST_MSI:
             return msirem->last_msi;
-        case 0x070:
+        case MSIREMAP_VERSION:
             return msirem->version;
-        case 0x078:
+        case MSIREMAP_COALESCE_NS:
             return msirem->coalesce_ns;
-        case 0x080:
+        case MSIREMAP_COALESCE_MAX:
             return msirem->coalesce_max;
-        case 0x088:
+        case MSIREMAP_NOTIF_CTRL:
             return msirem->notif_ctrl;
-        case 0x090:
+        case MSIREMAP_CHARDEV_CTRL:
             return msirem->chardev_ctrl;
-        case 0x098:
+        case MSIREMAP_TRACE_MASK:
             return msirem->trace_mask;
-        case 0x0A0:
+        case MSIREMAP_BH_PENDING:
             return msirem->bh_pending;
-        case 0x0A8:
+        case MSIREMAP_HOTPLUG_SEQ:
             return msirem->hotplug_seq;
     }
 
@@ -81,55 +139,58 @@ static void riscv_msirem_write(void *opaque, hwaddr addr, uint64_t data, unsigne
 
     /* If addr not writable, ignore the write */
     switch (addr) {
-        case 0x000:
+        case MSIREMAP_PTBR:
             msirem->ptbr = data;
             break;
-        case 0x008:
+        case MSIREMAP_FLBR:
             msirem->flbr = data;
             break;
-        case 0x010:
+        case MSIREMAP_FLQC:
+            /* FIX: Remove this later */
+            fault_logger(msirem, 0x00, 0x100);
             msirem->flqc = data;
             break;
-        case 0x020:
+        case MSIREMAP_FLTAIL:
             msirem->fltail = data;
             break;
-        case 0x030:
+        case MSIREMAP_CTRL:
             msirem->ctrl = data;
             break;
-        case 0x038:
+        case MSIREMAP_IMSIC_BASE:
             msirem->imsic_base = data;
             break;
-        case 0x040:
+        case MSIREMAP_IMSIC_STRIDE:
             msirem->imsic_stride = data;
             break;
-        case 0x048:
+        case MSIREMAP_IMSIC_PRIV_OFF:
             msirem->imsic_priv_off = data;
             break;
-        case 0x050:
+        case MSIREMAP_FAULT_INJ:
             msirem->fault_inj = data;
             break;
-        case 0x058:
+        case MSIREMAP_PERF_CTR:
             msirem->perf_ctr = data;
             break;
-        case 0x060:
+        case MSIREMAP_PERF_FAULT:
             msirem->perf_fault = data;
             break;
-        case 0x078:
+        case MSIREMAP_COALESCE_NS:
             msirem->coalesce_ns = data;
             break;
-        case 0x080:
+        case MSIREMAP_COALESCE_MAX:
             msirem->coalesce_max = data;
             break;
-        case 0x088:
+        case MSIREMAP_NOTIF_CTRL:
             msirem->notif_ctrl = data;
             break;
-        case 0x090:
+        case MSIREMAP_CHARDEV_CTRL:
             msirem->chardev_ctrl = data;
             break;
-        case 0x098:
+        case MSIREMAP_TRACE_MASK:
             msirem->trace_mask = data;
             break;
-        case 0xF00:
+        case MSIREMAP_DOORBELL:
+            riscv_msirem_send_msi(msirem);
             msirem->doorbell = data;
     }
 }
