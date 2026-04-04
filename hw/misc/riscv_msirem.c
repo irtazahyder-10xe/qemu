@@ -71,6 +71,122 @@
 #define MSIREMAP_PERF_FAULT     0x060
 #define PERF_FAULT_COUNT_MASK   ((1ULL << 32) - 1)
 
+#define MSIREMAP_LAST_MSI       0x068
+#define LAST_MSI_DATA_MASK      ((1ULL << 32) - 1)
+
+#define MSIREMAP_VERSION        0x070
+#define VERSION_MASK            ((1ULL << 8) - 1)
+
+#define MSIREMAP_COALESCE_NS    0x078
+
+#define MSIREMAP_COALESCE_MAX   0x080
+#define COALESCE_MAX_MASK       ((1ULL << 16) - 1)
+
+#define MSIREMAP_NOTIF_CTRL     0x088
+#define NOTIF_CTRL_PWRDN_EN     0x2
+#define NOTIF_CTRL_RESET_EN     0x1
+
+#define MSIREMAP_CHARDEV_CTRL   0x090
+#define CHARDEV_CTRL_HEX_DUMP   (1 << 2)
+#define CHARDEV_CTRL_VERBOSE    (1 << 1)
+#define CHARDEV_CTRL_EN         0x1
+
+#define MSIREMAP_TRACE_MASK     0x098
+#define TRACE_MASK_BH           (1 << 7)
+#define TRACE_MASK_COALESCE     (1 << 6)
+#define TRACE_MASK_FAULT        (1 << 5)
+#define TRACE_MASK_DELIVER      (1 << 4)
+#define TRACE_MASK_PTE_FETCH    (1 << 2)
+#define TRACE_MASK_MSI_RX       (1 << 1)
+
+#define MSIREMAP_BH_PENDING     0x0A0
+#define BH_PENDING_COUNT_MASK   ((1ULL << 8) - 1)
+
+#define MSIREMAP_HOTPLUG_SEQ    0x0A8
+
+#define MSIREMAP_DOORBELL       0xF00
+#define DOORBELL_MSI_MASK       ((1ULL << 32) - 1)
+
+/* TODO: Add logic to send msi */
+static void riscv_msirem_send_msi(RISCVMSIRemState *s){
+    return;
+}
+
+/* Timer functions */
+static void reset_timer(RISCVMSIRemState *s) {
+    if (s->coalesce_ns > 0) {
+        timer_mod_ns(&s->cb_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + s->coalesce_ns);
+    }
+}
+
+static void cb_send_msi(void *opaque){
+    RISCVMSIRemState *s = RISCV_MSIREM(opaque);
+    /* TODO: Add logic to send all msi's curerntly in coalescing buffer */
+    for (uint64_t i = 0; i < s->coalesce_max; i++) {
+        riscv_msirem_send_msi(s);
+    }
+    reset_timer(s);
+}
+
+/**
+ * Fault subsystem
+ */
+
+static void fault_sb_to_DRAM(void *opaque) {
+    MemTxResult res = MEMTX_OK;
+    RISCVMSIRemState *s = RISCV_MSIREM(opaque);
+    hwaddr addr;
+    uint64_t qsize, qsize_mask, next_flhead;
+    FaultLog *f;
+
+    qsize = (s->flbr >> FLBR_QSIZE_SHIFT) & FLBR_QSIZE_MASK;
+    qsize_mask = (1 << qsize) - 1;
+    next_flhead = (s->internal_flhead + 1) & (qsize_mask | (0x1 << qsize));
+
+    /* Checking if there is a difference of 1 entry between next flhead and
+     * current fltail. Otherwise DRAM ring buffer full, so not write to DRAM */
+    if (((next_flhead + 1) & qsize_mask) != s->fltail) {
+        addr = (s->flbr >> FLBR_PPN_SHIFT) & FLBR_PPN_MASK;
+        addr <<= 12;
+        addr += (hwaddr) (s->flhead << 4);
+        f = g_queue_peek_head(s->staging_buffer);
+        /* Saving the first double */
+        address_space_stq_le(&address_space_memory, addr,
+                          f->fault_info,
+                          MEMTXATTRS_UNSPECIFIED, &res);
+        if (res == MEMTX_OK) {
+            /* Saving the second double */
+            address_space_stq_le(&address_space_memory, addr + 8,
+                              f->timestamp_ns,
+                              MEMTXATTRS_UNSPECIFIED, &res);
+            /* This should never fail */
+            if (res == MEMTX_OK) {
+                f = g_queue_pop_head(s->staging_buffer);
+                s->internal_flhead = next_flhead;
+                s->flhead = next_flhead & qsize_mask;
+                g_free(f);
+            }
+        }
+    }
+}
+
+static void fault_subsystem_init(RISCVMSIRemState *s) {
+    s->staging_buffer = g_queue_new();
+    /* Scheduling write from staging buffer -> DRAM to bottom half */
+    s->staging_buffer_bh = qemu_bh_new(fault_sb_to_DRAM, s);
+}
+
+static void fault_logger(RISCVMSIRemState *s, uint8_t fault_code,
+                         uint32_t msi_data) {
+    FaultLog *f = g_new(FaultLog, 1);
+    f->fault_info = ((uint64_t) msi_data << 32) | fault_code;
+    f->timestamp_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    g_queue_push_tail(s->staging_buffer, f);
+}
+
+/**
+ * MMIO operations
+ */
 
 static uint64_t riscv_msirem_read(void *opaque, hwaddr addr, unsigned size)
 {
@@ -242,12 +358,17 @@ static void riscv_msirem_realize(DeviceState *dev, Error **errp)
 
 static void riscv_msirem_unrealize(DeviceState *dev)
 {
+    RISCVMSIRemState *s = RISCV_MSIREM(dev);
+    g_queue_free(s->staging_buffer);
 }
 
 static void riscv_msirem_instance_init (Object *obj)
 {
     RISCVMSIRemState *s = RISCV_MSIREM(obj);
+    timer_init_ns(&s->cb_timer, QEMU_CLOCK_VIRTUAL, cb_send_msi, s);
     s->version = 0x10;
+
+    fault_subsystem_init(s);
 }
 
 static void riscv_msirem_class_init (ObjectClass *class, void *data)

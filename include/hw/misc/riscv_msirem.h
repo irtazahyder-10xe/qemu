@@ -40,6 +40,10 @@ struct RISCVMSIRemState {
 
     CharBackend debug_log;
 
+    /* Internal is always 1 bit more than their counterpart */
+    uint64_t internal_flhead;
+    // uint64_t internal_fltail;
+
     /*< public >*/
     MemoryRegion mmio;
     MemoryRegion regfile;
@@ -83,5 +87,10 @@ typedef struct PTE {
     uint8_t guest_idx;
     uint8_t priv;
 } PTE;
+
+typedef struct FaultLog {
+    uint64_t fault_info;
+    uint64_t timestamp_ns;
+} FaultLog;
 
 DeviceState *riscv_msirem_create(hwaddr addr);
