@@ -10,12 +10,13 @@
 #include "hw/irq.h"
 #include "hw/misc/riscv_msirem.h"
 #include "migration/vmstate.h"
+#include "qom/object.h"
 #include "trace.h"
 
 
 static uint64_t riscv_msirem_read(void *opaque, hwaddr addr, unsigned size)
 {
-    if (size != 8) {
+    if ((addr & 0x7) != 0) {
         return 0;
     }
 
@@ -72,7 +73,7 @@ static uint64_t riscv_msirem_read(void *opaque, hwaddr addr, unsigned size)
 
 static void riscv_msirem_write(void *opaque, hwaddr addr, uint64_t data, unsigned size)
 {
-    if (size != 8) {
+    if ((addr & 0x7) != 0) {
         return;
     }
 
@@ -139,6 +140,10 @@ static const MemoryRegionOps riscv_msirem_ops = {
     .valid = {
         .min_access_size = 8,
         .max_access_size = 8
+    },
+    .impl = {
+        .min_access_size = 8,
+        .max_access_size = 8
     }
 };
 
@@ -171,15 +176,16 @@ static void riscv_msirem_realize(DeviceState *dev, Error **errp)
                                         &msirem->alias, 1);
 
     sysbus_init_mmio(SYS_BUS_DEVICE(dev), &msirem->mmio);
+    sysbus_init_irq(SYS_BUS_DEVICE(dev), &msirem->fault_irq);
 }
 
 static void riscv_msirem_unrealize(DeviceState *dev)
 {
 }
 
-static void riscv_msirem_instance_init (Object *o)
+static void riscv_msirem_instance_init (Object *obj)
 {
-    RISCVMSIRemState *s = RISCV_MSIREM(o);
+    RISCVMSIRemState *s = RISCV_MSIREM(obj);
     s->version = 0x10;
 }
 
@@ -188,6 +194,7 @@ static void riscv_msirem_class_init (ObjectClass *class, void *data)
     DeviceClass *dc = DEVICE_CLASS(class);
 
     dc->realize = riscv_msirem_realize;
+    dc->desc = "MSI Remapper";
     dc->unrealize = riscv_msirem_unrealize;
 }
 
@@ -198,6 +205,13 @@ static const TypeInfo riscv_msirem_info = {
     .instance_init = riscv_msirem_instance_init,
     .class_init = riscv_msirem_class_init
 };
+
+static void riscv_msirem_register_type(void)
+{
+    type_register_static(&riscv_msirem_info);
+}
+
+type_init(riscv_msirem_register_type);
 
 DeviceState *riscv_msirem_create(hwaddr addr)
 {
