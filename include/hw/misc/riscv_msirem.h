@@ -15,6 +15,7 @@ DECLARE_INSTANCE_CHECKER(RISCVMSIRemState, RISCV_MSIREM, TYPE_RISCV_MSIREM)
 
 /* MSI Remapper Total size */
 #define MSIREM_SIZE (1 << 12)
+#define COALESCE_BUFF_MAX 256
 
 /* MSI Remapper Alias region size */
 #define MSIREM_ALIAS_SIZE   256
@@ -32,6 +33,7 @@ struct RISCVMSIRemState {
     GQueue *staging_buffer;
     QEMUBH *staging_buffer_bh;  /*< Stagging Buffer bottom half */
 
+    uint64_t coalescing_buff[COALESCE_BUFF_MAX];
     QEMUTimer cb_timer;         /*< Coalescing Buffer timer */
 
     QemuMutex ptb_mutex;        /*< Page Table Mutex for RCU */
@@ -84,6 +86,19 @@ typedef struct PTE {
     uint8_t guest_idx;
     uint8_t priv;
 } PTE;
+
+enum FaultCodes {
+FAULT_INVALID_PTE       = 0x01,
+FAULT_UNEXPECTED_LEAF   = 0x02,
+FAULT_EXPECTED_LEAF     = 0x03,
+FAULT_RESERVED_BITS     = 0x04,
+FAULT_INVALID_PRIV      = 0x05,
+FAULT_ACCESS_ERROR      = 0x06,
+FAULT_MODE_OFF          = 0x07,
+FAULT_DEVICE_DISABLE    = 0x08,
+POWER_DOWN_MARKER       = 0xFE,
+FAULT_INTERNAL_ERROR    = 0xFF
+};
 
 typedef struct FaultLog {
     uint64_t fault_info;

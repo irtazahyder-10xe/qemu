@@ -1,21 +1,22 @@
 #include "qemu/osdep.h"
-#include "trace.h"
-#include "hw/irq.h"
 #include "qemu/log.h"
-#include "hw/sysbus.h"
-#include "qapi/error.h"
-#include "qom/object.h"
 #include "qemu/timer.h"
 #include "qemu/module.h"
-#include "exec/address-spaces.h"
-#include "qemu/error-report.h"
-#include "migration/vmstate.h"
-#include "hw/qdev-properties.h"
-#include "hw/qdev-properties-system.h"
-#include "qemu/event_notifier.h"
-#include "qapi/visitor.h"
-#include "hw/misc/riscv_msirem.h"
 #include "qemu/main-loop.h"
+#include "qemu/error-report.h"
+#include "hw/irq.h"
+#include "hw/sysbus.h"
+#include "hw/qdev-properties.h"
+#include "hw/misc/riscv_msirem.h"
+#include "hw/qdev-properties-system.h"
+#include "qapi/error.h"
+#include "qapi/visitor.h"
+#include "sysemu/reset.h"
+#include "sysemu/runstate.h"
+#include "exec/address-spaces.h"
+#include "qom/object.h"
+#include "migration/vmstate.h"
+#include "trace.h"
 
 #define MSIREMAP_PTBR           0x000
 #define PTBR_PPN_MASK           ((1ULL << (51 - 8 + 1)) - 1)
@@ -269,8 +270,6 @@ static void riscv_msirem_write(void *opaque, hwaddr addr, uint64_t data, unsigne
             msirem->flbr = data;
             break;
         case MSIREMAP_FLQC:
-            /* FIX: Remove this later */
-            fault_logger(msirem, 0x00, 0x100);
             msirem->flqc = data;
             break;
         case MSIREMAP_FLTAIL:
@@ -408,12 +407,56 @@ static VMStateDescription vmstate_riscv_msirem = {
     }
 };
 
+/* Runstate functions i.e. reset, powerdown, cleanup */
+static void common_cleanup(RISCVMSIRemState *s)
+{
+    /* Flush the coalecing buffer */
+    memset(&s->coalescing_buff, 0, sizeof(uint64_t) * COALESCE_BUFF_MAX);
+}
+
+static void riscv_msirem_cleanup(Notifier *notifier, void *data)
+{
+    RISCVMSIRemState *s = container_of(notifier, RISCVMSIRemState,
+                                       powerdown);
+    /* Perform cleanup */
+    common_cleanup(s);
+    /* Write power-down marker in fault log pointed by flhead - 1 */
+    fault_logger(s, POWER_DOWN_MARKER, NULL);
+}
+
+static void riscv_msirem_reset(void *opaque)
+{
+    RISCVMSIRemState *s = RISCV_MSIREM(opaque);
+    /* Setting writable MMRs except FLBR and PTBR to 0x0 */
+    s->flqc = 0;
+    s->fltail = 0;
+    s->ctrl = 0;
+    s->imsic_base = 0;
+    s->imsic_stride = 0;
+    s->imsic_priv_off = 0;
+    s->fault_inj = 0;
+    s->perf_ctr = 0;
+    s->perf_fault = 0;
+    s->coalesce_ns = 0;
+    s->coalesce_max = 64;
+    s->notif_ctrl = 0;
+    s->chardev_ctrl = 0;
+    s->trace_mask = 0;
+
+    common_cleanup(s);
+}
+
 static void riscv_msirem_instance_init (Object *obj)
 {
     RISCVMSIRemState *s = RISCV_MSIREM(obj);
     timer_init_ns(&s->cb_timer, QEMU_CLOCK_VIRTUAL, cb_send_msi, s);
     s->version = 0x10;
     fault_subsystem_init(s);
+    s->powerdown.notify = riscv_msirem_cleanup;
+    qemu_register_powerdown_notifier(&s->powerdown);
+    qemu_register_reset(riscv_msirem_reset, s);
+    /* To powerdown qemu_system_powerdown_request */
+    /* To soft reset qemu_system_reset_request */
 }
 
 static void riscv_msirem_get_pgtb_count(Object *obj, Visitor *v,
