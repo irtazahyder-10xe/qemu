@@ -34,6 +34,7 @@
 #include "sysemu/kvm.h"
 #include "kvm/kvm_riscv.h"
 #include "migration/vmstate.h"
+#include "trace.h"
 
 #define APLIC_MAX_IDC                  (1UL << 14)
 #define APLIC_MAX_SOURCE               1024
@@ -346,6 +347,8 @@ static void riscv_aplic_msi_send(RISCVAPLICState *aplic,
     RISCVAPLICState *aplic_m;
     uint32_t lhxs, lhxw, hhxs, hhxw, group_idx, msicfgaddr, msicfgaddrH;
 
+    trace_riscv_aplic_msi_send(hart_idx, guest_idx, eiid,
+                               aplic->mmode ? "Machine"  : "Supervisor");
     aplic_m = aplic;
     /**
      * Due to the change in children logic,

@@ -96,10 +96,10 @@
 #define CHARDEV_CTRL_EN         0x1
 
 #define MSIREMAP_TRACE_MASK     0x098
-#define TRACE_MASK_BH           (1 << 7)
 #define TRACE_MASK_COALESCE     (1 << 6)
 #define TRACE_MASK_FAULT        (1 << 5)
 #define TRACE_MASK_DELIVER      (1 << 4)
+#define TRACE_MASK_BH           (1 << 3)
 #define TRACE_MASK_PTE_FETCH    (1 << 2)
 #define TRACE_MASK_MSI_RX       (1 << 1)
 
@@ -134,11 +134,15 @@
 
 static void fault_sb_to_DRAM(void *opaque)
 {
-    MemTxResult res = MEMTX_OK;
     RISCVMSIRemState *s = RISCV_MSIREM(opaque);
+    MemTxResult res = MEMTX_OK;
     hwaddr addr;
     uint64_t qsize, qsize_mask, next_flhead;
     FaultLog *f;
+
+    if (s->trace_mask & TRACE_MASK_BH) {
+        trace_fault_sb_to_DRAM();
+    }
 
     qsize = s->flbr >> FLBR_QSIZE_SHIFT & FLBR_QSIZE_MASK;
     qsize_mask = (1 << qsize) - 1;
@@ -180,6 +184,9 @@ static void fault_subsystem_init(RISCVMSIRemState *s)
 static void fault_logger(RISCVMSIRemState *s, uint8_t fault_code,
                          uint32_t msi_data)
 {
+    if (s->trace_mask & TRACE_MASK_FAULT) {
+        trace_fault_logger(msi_data, fault_code);
+    }
     FaultLog *f = g_new(FaultLog, 1);
     f->fault_info = (uint64_t)msi_data << 32 | fault_code;
     f->timestamp_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
@@ -209,6 +216,7 @@ static void invoke_imsic_dengine(RISCVMSIRemState *s, uint32_t eiid,
                                  uint8_t priv)
 {
     hwaddr imsic_addr;
+    const char *priv_name = "Machine";
 
     if (priv > VSMODE) {
         fault_logger(s, FAULT_INVALID_PRIV, eiid);
@@ -219,10 +227,16 @@ static void invoke_imsic_dengine(RISCVMSIRemState *s, uint32_t eiid,
     imsic_addr += (s->imsic_stride & IMSIC_STRIDE_MASK) * hart_idx;
 
     if (priv > MMODE) {
+        priv_name = "Supervisor";
         imsic_addr += s->imsic_priv_off & IMSIC_PRIV_OFF_MASK;
     }
     if (priv > SMODE) {
+        priv_name = "Virtual Supervisor";
         imsic_addr += (1 + guest_idx) * 0x1000;
+    }
+
+    if (s->trace_mask & TRACE_MASK_DELIVER) {
+        trace_invoke_imsic_dengine(eiid, hart_idx, guest_idx, priv_name);
     }
 
     riscv_msirem_send_msi(s, imsic_addr, eiid);
@@ -262,6 +276,11 @@ static void pgtb_walker(RISCVMSIRemState *s, uint32_t msi, uint8_t walk_depth)
 
             index = msi >> (i * 8) & MSI_INDEX_MASK;
             pte = get_pte(addr, index, &res);
+
+            if (s->trace_mask & TRACE_MASK_PTE_FETCH) {
+                trace_pgtb_walker((uint64_t) (addr + (index << 3)), pte);
+            }
+
             if (res != MEMTX_OK) {
                 /* PTE does not exist */
                 fault = FAULT_ACCESS_ERROR;
@@ -352,6 +371,11 @@ static void reset_cb_timer(RISCVMSIRemState *s)
 static void cb_send_msi(void *opaque)
 {
     RISCVMSIRemState *s = RISCV_MSIREM(opaque);
+
+    if (s->trace_mask & TRACE_MASK_COALESCE) {
+        trace_cb_flush();
+    }
+
     for (uint64_t i = 0; i < s->cb_count; i++) {
         translate_msi(s, s->cb[i]);
     }
@@ -365,9 +389,17 @@ static void register_msi(RISCVMSIRemState *s)
 {
     uint32_t msi = (uint32_t) (s->doorbell & DOORBELL_MSI_MASK);
 
+    s->last_msi = msi;
+    if (s->trace_mask & TRACE_MASK_MSI_RX) {
+        trace_register_msi(msi);
+    }
     /* Put the msi in the coalescing buffer if it exists */
     if (s->coalesce_ns != 0 && s->coalesce_max > 1) {
         s->cb[s->cb_count++] = msi;
+
+        if (s->trace_mask & TRACE_MASK_COALESCE) {
+            trace_cb_enqueue(s->cb_count, s->coalesce_max);
+        }
 
         /* Checking if the coalescing buffer if full
          * If it is full sending msi */
@@ -594,7 +626,7 @@ static void riscv_msirem_reset(void *opaque)
     s->coalesce_max = 64;
     s->notif_ctrl = 0;
     s->chardev_ctrl = 0;
-    s->trace_mask = 0;
+    s->trace_mask = 0xf;
 
     common_cleanup(s);
 }
@@ -651,6 +683,7 @@ static void riscv_msirem_instance_init (Object *obj)
     RISCVMSIRemState *s = RISCV_MSIREM(obj);
     timer_init_ns(&s->cb_timer, QEMU_CLOCK_VIRTUAL, cb_send_msi, s);
     s->version = 0x10;
+    s->trace_mask = 0xf;
     fault_subsystem_init(s);
     s->powerdown.notify = riscv_msirem_powerdown;
     qemu_register_powerdown_notifier(&s->powerdown);
