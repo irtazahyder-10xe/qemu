@@ -20,7 +20,7 @@
 #include "trace.h"
 
 #define MSIREMAP_PTBR           0x000
-#define PTBR_PPN_MASK           ((1ULL << 44) - 1)
+#define PTBR_PPN_MASK           ((1UL << 44) - 1)
 #define PTBR_PPN_SHIFT          8
 #define PTBR_MODE_MASK          0xF
 
@@ -37,10 +37,10 @@
 #define FLQC_EN                 0x1
 
 #define MSIREMAP_FLHEAD         0x018
-#define FLHEAD_MASK             ((1ULL << 32) - 1)
+#define FLHEAD_MASK             ((1UL << 32) - 1)
 
 #define MSIREMAP_FLTAIL         0x020
-#define FLTAIL_MASK             ((1ULL << 32) - 1)
+#define FLTAIL_MASK             ((1UL << 32) - 1)
 
 #define MSIREMAP_STATUS         0x028
 #define STATUS_OFLOW            (1 << 7)
@@ -58,33 +58,33 @@
 #define CTRL_EN                 0x1
 
 #define MSIREMAP_IMSIC_BASE     0x038
-#define IMSIC_BASE_MASK         ((1ULL << 56) - 1)
+#define IMSIC_BASE_MASK         ((1UL << 56) - 1)
 
 #define MSIREMAP_IMSIC_STRIDE   0x040
-#define IMSIC_STRIDE_MASK       ((1ULL << 12) - 1)
+#define IMSIC_STRIDE_MASK       ((1UL << 12) - 1)
 
 #define MSIREMAP_IMSIC_PRIV_OFF 0x048
-#define IMSIC_PRIV_OFF_MASK     ((1ULL << 12) - 1)
+#define IMSIC_PRIV_OFF_MASK     ((1UL << 12) - 1)
 
 #define MSIREMAP_FAULT_INJ      0x050
-#define FAULT_INJ_CODE_MASK     ((1ULL << 8) - 1)
+#define FAULT_INJ_CODE_MASK     ((1UL << 8) - 1)
 
 #define MSIREMAP_PERF_CTR       0x058
-#define PERF_CTR_COUNT_MASK     ((1ULL << 32) - 1)
+#define PERF_CTR_COUNT_MASK     ((1UL << 32) - 1)
 
 #define MSIREMAP_PERF_FAULT     0x060
-#define PERF_FAULT_COUNT_MASK   ((1ULL << 32) - 1)
+#define PERF_FAULT_COUNT_MASK   ((1UL << 32) - 1)
 
 #define MSIREMAP_LAST_MSI       0x068
-#define LAST_MSI_DATA_MASK      ((1ULL << 32) - 1)
+#define LAST_MSI_DATA_MASK      ((1UL << 32) - 1)
 
 #define MSIREMAP_VERSION        0x070
-#define VERSION_MASK            ((1ULL << 8) - 1)
+#define VERSION_MASK            ((1UL << 8) - 1)
 
 #define MSIREMAP_COALESCE_NS    0x078
 
 #define MSIREMAP_COALESCE_MAX   0x080
-#define COALESCE_MAX_MASK       ((1ULL << 16) - 1)
+#define COALESCE_MAX_MASK       ((1UL << 16) - 1)
 
 #define MSIREMAP_NOTIF_CTRL     0x088
 #define NOTIF_CTRL_PWRDN_EN     0x2
@@ -104,29 +104,90 @@
 #define TRACE_MASK_MSI_RX       (1 << 1)
 
 #define MSIREMAP_BH_PENDING     0x0A0
-#define BH_PENDING_COUNT_MASK   ((1ULL << 8) - 1)
+#define BH_PENDING_COUNT_MASK   ((1UL << 8) - 1)
 
 #define MSIREMAP_HOTPLUG_SEQ    0x0A8
 
 #define MSIREMAP_DOORBELL       0xF00
-#define DOORBELL_MSI_MASK       ((1ULL << 32) - 1)
+#define DOORBELL_MSI_MASK       ((1UL << 32) - 1)
 
-#define PTE_VALID               (1ULL << 63)
-#define PTE_LEAF                (1ULL << 62)
-#define PTE_PPN_MASK            ((1ULL << 44) - 1)
+#define PTE_VALID               (1UL << 63)
+#define PTE_LEAF                (1UL << 62)
+#define PTE_PPN_MASK            ((1UL << 44) - 1)
 #define PTE_PPN_SHIFT           18
-#define PTE_HART_IDX_MASK       ((1ULL << 8) - 1)
+#define PTE_HART_IDX_MASK       ((1UL << 8) - 1)
 #define PTE_HART_IDX_SHIFT      54
 #define PTE_PRIV_MASK           0x3
 #define PTE_PRIV_SHIFT          52
-#define PTE_GIDX_MASK           ((1ULL << 8) - 1)
+#define PTE_GIDX_MASK           ((1UL << 8) - 1)
 #define PTE_GIDX_SHIFT          44
-#define PTE_EIID_MASK           ((1ULL << 32) - 1)
+#define PTE_EIID_MASK           ((1UL << 32) - 1)
 #define PTE_EIID_SHIFT          12
-#define PTE_NONLEAF_PRIV_MASK   ((1ULL << 18) - 1)
-#define PTE_LEAF_PRIV_MASK      ((1ULL << 12) - 1)
+#define PTE_NONLEAF_PRIV_MASK   ((1UL << 18) - 1)
+#define PTE_LEAF_PRIV_MASK      ((1UL << 12) - 1)
 
-#define MSI_INDEX_MASK          ((1ULL << 8) - 1)
+#define MSI_INDEX_MASK          ((1UL << 8) - 1)
+
+/**
+ * Chardev Logger
+ */
+
+static void chardev_log_pte(RISCVMSIRemState *s, uint64_t pte)
+{
+    uint8_t hex_dump_msg[] = "PTE DUMP:\n";
+    uint8_t char_buff[128];
+    size_t len;
+    qemu_chr_fe_write(&s->debug_logger, hex_dump_msg, sizeof(hex_dump_msg));
+
+    if (s->chardev_ctrl & CHARDEV_CTRL_HEX_DUMP) {
+        /* Converting the hex value to string and then storing it */
+        len = snprintf((char *) char_buff, sizeof(char_buff),
+                       "HEX: 0x%" PRIx64 "\n", pte);
+        qemu_chr_fe_write(&s->debug_logger, char_buff, len);
+    }
+
+    if (s->chardev_ctrl & CHARDEV_CTRL_VERBOSE) {
+        len = snprintf((char *) char_buff, sizeof(char_buff),
+                       "Valid: %1d, Leaf: %1d, ",
+                       !!(pte & PTE_VALID),
+                       !!(pte & PTE_LEAF));
+        qemu_chr_fe_write(&s->debug_logger, char_buff, len);
+        if (pte & PTE_LEAF) {
+            /* Verbose logging for leaf PPN */
+            len = snprintf((char *) char_buff, sizeof(char_buff),
+                           "HIDX: %" PRIu64 ", GIDX: %" PRIu64 ", Priv: %" PRIu32 ", EIID: 0x%" PRIx64 "\n",
+                            pte >> PTE_HART_IDX_SHIFT & PTE_HART_IDX_MASK,
+                            pte >> PTE_GIDX_SHIFT & PTE_GIDX_MASK,
+                            (uint32_t) (pte >> PTE_PRIV_SHIFT & PTE_PRIV_MASK),
+                            pte >> PTE_EIID_SHIFT & PTE_EIID_MASK);
+            qemu_chr_fe_write(&s->debug_logger, char_buff, len);
+        } else {
+            /* Verbose logging for non-leaf PPN */
+            len = snprintf((char *) char_buff, sizeof(char_buff),
+                           "PPN: 0x%" PRIx64 "\n",
+                           pte >> PTE_PPN_SHIFT & PTE_PPN_MASK);
+            qemu_chr_fe_write(&s->debug_logger, char_buff, len);
+        }
+    }
+}
+
+static void chardev_log_fault(RISCVMSIRemState *s, uint32_t msi,
+                              uint8_t fault_code)
+{
+    uint8_t hex_dump_msg[] = "FAULT DUMP: ";
+    uint8_t fault_err[32];
+    size_t len;
+    qemu_chr_fe_write(&s->debug_logger, hex_dump_msg, sizeof(hex_dump_msg));
+
+    len = snprintf((char *) fault_err, sizeof(fault_err), "CODE: 0x%" PRIx8 "\n", fault_code);
+    qemu_chr_fe_write(&s->debug_logger, fault_err, len);
+
+    if (s->chardev_ctrl & CHARDEV_CTRL_VERBOSE) {
+        len = snprintf((char *) fault_err, sizeof(fault_err), "MSI: 0x%" PRIx32 "\n",
+                       fault_code);
+        qemu_chr_fe_write(&s->debug_logger, fault_err, len);
+    }
+}
 
 /**
  * Fault subsystem
@@ -181,12 +242,16 @@ static void fault_subsystem_init(RISCVMSIRemState *s)
     s->staging_buffer_bh = qemu_bh_new(fault_sb_to_DRAM, s);
 }
 
-static void fault_logger(RISCVMSIRemState *s, uint8_t fault_code,
-                         uint32_t msi_data)
+static void fault_logger(RISCVMSIRemState *s, uint32_t msi_data,
+                         uint8_t fault_code)
 {
     if (s->trace_mask & TRACE_MASK_FAULT) {
         trace_fault_logger(msi_data, fault_code);
     }
+    if (s->chardev_ctrl & CHARDEV_CTRL_EN) {
+        chardev_log_fault(s, msi_data, fault_code);
+    }
+
     FaultLog *f = g_new(FaultLog, 1);
     f->fault_info = (uint64_t)msi_data << 32 | fault_code;
     f->timestamp_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
@@ -206,7 +271,7 @@ static void riscv_msirem_send_msi(RISCVMSIRemState *s, hwaddr imsic_addr, uint32
 
     if (res != MEMTX_OK) {
         /* DMA access to IMSIC failed */
-        fault_logger(s, FAULT_ACCESS_ERROR, eiid);
+        fault_logger(s, eiid, FAULT_ACCESS_ERROR);
     }
 }
 
@@ -219,7 +284,7 @@ static void invoke_imsic_dengine(RISCVMSIRemState *s, uint32_t eiid,
     const char *priv_name = "Machine";
 
     if (priv > VSMODE) {
-        fault_logger(s, FAULT_INVALID_PRIV, eiid);
+        fault_logger(s, eiid, FAULT_INVALID_PRIV);
         return;
     }
 
@@ -270,7 +335,7 @@ static void pgtb_walker(RISCVMSIRemState *s, uint32_t msi, uint8_t walk_depth)
                                         MEMTXATTRS_UNSPECIFIED, &res);
             if (res != MEMTX_OK) {
                 /* Root page table is not configured */
-                fault_logger(s, FAULT_ACCESS_ERROR, 0);
+                fault_logger(s, 0, FAULT_ACCESS_ERROR);
                 return;
             }
 
@@ -279,6 +344,10 @@ static void pgtb_walker(RISCVMSIRemState *s, uint32_t msi, uint8_t walk_depth)
 
             if (s->trace_mask & TRACE_MASK_PTE_FETCH) {
                 trace_pgtb_walker((uint64_t) (addr + (index << 3)), pte);
+            }
+
+            if (s->chardev_ctrl & CHARDEV_CTRL_EN) {
+                chardev_log_pte(s, pte);
             }
 
             if (res != MEMTX_OK) {
@@ -299,7 +368,6 @@ static void pgtb_walker(RISCVMSIRemState *s, uint32_t msi, uint8_t walk_depth)
                     goto fault_exception;
                 }
             }
-
             pgtb_base = pte >> PTE_PPN_SHIFT & PTE_PPN_MASK;
             pgtb_base <<= 12;
             s->total_pgtb_walk++;
@@ -320,6 +388,7 @@ static void pgtb_walker(RISCVMSIRemState *s, uint32_t msi, uint8_t walk_depth)
             hart_idx = pte >> PTE_HART_IDX_SHIFT & PTE_HART_IDX_MASK;
             guest_idx = pte >> PTE_GIDX_SHIFT & PTE_GIDX_MASK;
             priv = pte >> PTE_PRIV_SHIFT & PTE_PRIV_MASK;
+            /* Logging only valid EIID leaf ptes */
         }
     }
 
@@ -330,7 +399,7 @@ static void pgtb_walker(RISCVMSIRemState *s, uint32_t msi, uint8_t walk_depth)
     return;
 
 fault_exception:
-    fault_logger(s, fault, 0);
+    fault_logger(s, 0, fault);
 }
 
 static void translate_msi(RISCVMSIRemState *s, uint32_t msi) {
@@ -339,7 +408,7 @@ static void translate_msi(RISCVMSIRemState *s, uint32_t msi) {
     switch (mode) {
         case OFF:
             /* MSI discarded and fault is logged in stagging buffer */
-            fault_logger(s, FAULT_MODE_OFF, msi);
+            fault_logger(s, msi, FAULT_MODE_OFF);
             break;
         case BARE:
             invoke_imsic_dengine(s, msi, 0, 0, MMODE);
@@ -355,7 +424,7 @@ static void translate_msi(RISCVMSIRemState *s, uint32_t msi) {
             break;
         default:
             /* Similar effect to OFF */
-            fault_logger(s, FAULT_MODE_OFF, msi);
+            fault_logger(s, msi, FAULT_MODE_OFF);
             break;
     }
 }
@@ -550,6 +619,68 @@ static const MemoryRegionOps riscv_msirem_ops = {
     }
 };
 
+/* Runstate functions i.e. reset, powerdown, cleanup */
+static void common_cleanup(RISCVMSIRemState *s)
+{
+    FaultLog *f;
+    /* Flush the coalecing buffer */
+    memset(&s->cb, 0, sizeof(uint64_t) * COALESCE_BUFF_MAX);
+
+    /* Flush fault logs in staging buffer */
+    while (!g_queue_is_empty(s->staging_buffer)) {
+        f = g_queue_pop_head(s->staging_buffer);
+        g_free(f);
+    }
+
+    /* Clearing bottom half */
+    qemu_bh_cancel(s->staging_buffer_bh);
+}
+
+static void riscv_msirem_powerdown(Notifier *notifier, void *data)
+{
+    RISCVMSIRemState *s = container_of(notifier, RISCVMSIRemState,
+                                       powerdown);
+    /* Perform cleanup */
+    common_cleanup(s);
+    /* Write power-down marker in fault log pointed by flhead - 1 */
+    fault_logger(s, 0, POWER_DOWN_MARKER);
+}
+
+static void riscv_msirem_reset(void *opaque)
+{
+    RISCVMSIRemState *s = RISCV_MSIREM(opaque);
+    /* Setting writable MMRs except FLBR and PTBR to 0x0 */
+    s->flqc = 0;
+    s->fltail = 0;
+    s->ctrl = 0;
+    s->imsic_base = 0;
+    s->imsic_stride = 0;
+    s->imsic_priv_off = 0;
+    s->fault_inj = 0;
+    s->perf_ctr = 0;
+    s->perf_fault = 0;
+    s->coalesce_ns = 0;
+    s->coalesce_max = 64;
+    s->notif_ctrl = 0;
+    s->chardev_ctrl = 0;
+    s->trace_mask = 0xf;
+
+    common_cleanup(s);
+}
+
+static void chrdev_logger_event(void *opaque, QEMUChrEvent event)
+{
+    RISCVMSIRemState *s = RISCV_MSIREM(opaque);
+    uint8_t end_msg[] = "START LOGGING END!";
+
+    if (event == CHR_EVENT_OPENED) {
+        qemu_chr_fe_write(&s->debug_logger, end_msg, sizeof(end_msg));
+    }
+}
+
+/**
+ * QOM
+ */
 static void riscv_msirem_realize(DeviceState *dev, Error **errp)
 {
     RISCVMSIRemState *msirem = RISCV_MSIREM(dev);
@@ -580,55 +711,9 @@ static void riscv_msirem_realize(DeviceState *dev, Error **errp)
 
     sysbus_init_mmio(SYS_BUS_DEVICE(dev), &msirem->mmio);
     sysbus_init_irq(SYS_BUS_DEVICE(dev), &msirem->fault_irq);
-}
 
-/* Runstate functions i.e. reset, powerdown, cleanup */
-static void common_cleanup(RISCVMSIRemState *s)
-{
-    FaultLog *f;
-    /* Flush the coalecing buffer */
-    memset(&s->cb, 0, sizeof(uint64_t) * COALESCE_BUFF_MAX);
-
-    /* Flush fault logs in staging buffer */
-    while (!g_queue_is_empty(s->staging_buffer)) {
-        f = g_queue_pop_head(s->staging_buffer);
-        g_free(f);
-    }
-
-    /* Clearing bottom half */
-    qemu_bh_cancel(s->staging_buffer_bh);
-}
-
-static void riscv_msirem_powerdown(Notifier *notifier, void *data)
-{
-    RISCVMSIRemState *s = container_of(notifier, RISCVMSIRemState,
-                                       powerdown);
-    /* Perform cleanup */
-    common_cleanup(s);
-    /* Write power-down marker in fault log pointed by flhead - 1 */
-    fault_logger(s, POWER_DOWN_MARKER, 0);
-}
-
-static void riscv_msirem_reset(void *opaque)
-{
-    RISCVMSIRemState *s = RISCV_MSIREM(opaque);
-    /* Setting writable MMRs except FLBR and PTBR to 0x0 */
-    s->flqc = 0;
-    s->fltail = 0;
-    s->ctrl = 0;
-    s->imsic_base = 0;
-    s->imsic_stride = 0;
-    s->imsic_priv_off = 0;
-    s->fault_inj = 0;
-    s->perf_ctr = 0;
-    s->perf_fault = 0;
-    s->coalesce_ns = 0;
-    s->coalesce_max = 64;
-    s->notif_ctrl = 0;
-    s->chardev_ctrl = 0;
-    s->trace_mask = 0xf;
-
-    common_cleanup(s);
+    qemu_chr_fe_set_handlers(&msirem->debug_logger, NULL, NULL, chrdev_logger_event,
+                             NULL, msirem, NULL, true);
 }
 
 static void riscv_msirem_unrealize(DeviceState *dev)
@@ -681,10 +766,14 @@ static VMStateDescription vmstate_riscv_msirem = {
 static void riscv_msirem_instance_init (Object *obj)
 {
     RISCVMSIRemState *s = RISCV_MSIREM(obj);
-    timer_init_ns(&s->cb_timer, QEMU_CLOCK_VIRTUAL, cb_send_msi, s);
+
     s->version = 0x10;
     s->trace_mask = 0xf;
+
+    timer_init_ns(&s->cb_timer, QEMU_CLOCK_VIRTUAL, cb_send_msi, s);
+
     fault_subsystem_init(s);
+
     s->powerdown.notify = riscv_msirem_powerdown;
     qemu_register_powerdown_notifier(&s->powerdown);
     qemu_register_reset(riscv_msirem_reset, s);
