@@ -23,18 +23,22 @@
 #define PTBR_PPN_MASK           ((1UL << 44) - 1)
 #define PTBR_PPN_SHIFT          8
 #define PTBR_MODE_MASK          0xF
+#define PTBR_MASK               ((PTBR_PPN_MASK << PTBR_PPN_SHIFT) | PTBR_MODE_MASK)
 
 #define MSIREMAP_FLBR           0x008
 #define FLBR_QSIZE_MASK         0x1F
 #define FLBR_QSIZE_SHIFT        52
 #define FLBR_PPN_MASK           PTBR_PPN_MASK
 #define FLBR_PPN_SHIFT          PTBR_PPN_SHIFT
+#define FLBR_MASK               (((uint64_t)FLBR_QSIZE_MASK << FLBR_QSIZE_SHIFT) | \
+                                 ((uint64_t)FLBR_PPN_MASK << FLBR_PPN_SHIFT))
 
 #define MSIREMAP_FLQC           0x010
 #define FLQC_IRQEN              (1 << 3)
 #define FLQC_CLR                (1 << 2)
 #define FLQC_OFLOW_CLR          (1 << 1)
 #define FLQC_EN                 0x1
+#define FLQC_MASK               (FLQC_IRQEN | FLQC_EN)
 
 #define MSIREMAP_FLHEAD         0x018
 #define FLHEAD_MASK             ((1UL << 32) - 1)
@@ -48,6 +52,8 @@
 #define STATUS_BUSY             (1 << 5)
 #define STATUS_QFULL            (1 << 4)
 #define STATUS_QEMPTY           (1 << 3)
+#define STATUS_MASK             (STATUS_OFLOW | STATUS_FAULT | STATUS_BUSY | \
+                                 STATUS_QFULL | STATUS_QEMPTY)
 
 #define MSIREMAP_CTRL           0x030
 #define CTRL_TEST_MODE          (1 << 7)
@@ -56,6 +62,8 @@
 #define CTRL_SOFT_RST           (1 << 4)
 #define CTRL_FAULT_IRQEN        (1 << 1)
 #define CTRL_EN                 0x1
+#define CTRL_MASK               (CTRL_TEST_MODE | CTRL_FAULT_CLR | \
+                                 CTRL_FAULT_IRQEN | CTRL_EN)
 
 #define MSIREMAP_IMSIC_BASE     0x038
 #define IMSIC_BASE_MASK         ((1UL << 56) - 1)
@@ -89,19 +97,25 @@
 #define MSIREMAP_NOTIF_CTRL     0x088
 #define NOTIF_CTRL_PWRDN_EN     0x2
 #define NOTIF_CTRL_RESET_EN     0x1
+#define NOTIF_CTRL_MASK         (NOTIF_CTRL_PWRDN_EN | NOTIF_CTRL_RESET_EN)
 
 #define MSIREMAP_CHARDEV_CTRL   0x090
 #define CHARDEV_CTRL_HEX_DUMP   (1 << 2)
 #define CHARDEV_CTRL_VERBOSE    (1 << 1)
 #define CHARDEV_CTRL_EN         0x1
+#define CHARDEV_CTRL_MASK       (CHARDEV_CTRL_HEX_DUMP | CHARDEV_CTRL_VERBOSE | \
+                                 CHARDEV_CTRL_EN)
 
 #define MSIREMAP_TRACE_MASK     0x098
-#define TRACE_MASK_COALESCE     (1 << 6)
-#define TRACE_MASK_FAULT        (1 << 5)
-#define TRACE_MASK_DELIVER      (1 << 4)
-#define TRACE_MASK_BH           (1 << 3)
-#define TRACE_MASK_PTE_FETCH    (1 << 2)
-#define TRACE_MASK_MSI_RX       (1 << 1)
+#define TRACE_MASK_BH           (1 << 5)
+#define TRACE_MASK_COALESCE     (1 << 4)
+#define TRACE_MASK_FAULT        (1 << 3)
+#define TRACE_MASK_DELIVER      (1 << 2)
+#define TRACE_MASK_PTE_FETCH    (1 << 1)
+#define TRACE_MASK_MSI_RX       0x1
+#define TRACE_MASK_ALL          (TRACE_MASK_BH | TRACE_MASK_COALESCE | \
+                                 TRACE_MASK_FAULT | TRACE_MASK_DELIVER | \
+                                 TRACE_MASK_PTE_FETCH | TRACE_MASK_MSI_RX)
 
 #define MSIREMAP_BH_PENDING     0x0A0
 #define BH_PENDING_COUNT_MASK   ((1UL << 8) - 1)
@@ -209,9 +223,14 @@ static void fault_sb_to_DRAM(void *opaque)
     qsize_mask = (1 << qsize) - 1;
     next_flhead = s->flhead + 1;
 
+    if (((next_flhead + 1) & qsize_mask) != s->fltail) {
+        /* RING Buffer is now full */
+        s->status |= STATUS_QFULL;
+    }
+
     /* Checking if there is a difference of 1 entry between next flhead and
      * current fltail. Otherwise DRAM ring buffer full, so not write to DRAM */
-    if (((next_flhead + 1) & qsize_mask) != s->fltail) {
+    if (!(s->status & STATUS_QFULL)) {
         addr = s->flbr >> FLBR_PPN_SHIFT & FLBR_PPN_MASK;
         addr <<= 12;
         addr += (hwaddr) (s->flhead << 4);
@@ -227,12 +246,20 @@ static void fault_sb_to_DRAM(void *opaque)
                                  MEMTXATTRS_UNSPECIFIED, &res);
             /* If all records save correctly, removing fault from stagging buffer */
             if (res == MEMTX_OK) {
+                /* This means queue was initially empty */
+                if (s->fltail == s->flhead) {
+                    s->status &= ~STATUS_QEMPTY;
+                }
                 f = g_queue_pop_head(s->staging_buffer);
                 g_free(f);
                 s->flhead = next_flhead & qsize_mask;
+                if (s->flqc & FLQC_IRQEN) {
+                    qemu_irq_raise(s->fault_irq);
+                }
             }
         }
     }
+
 }
 
 static void fault_subsystem_init(RISCVMSIRemState *s)
@@ -245,6 +272,11 @@ static void fault_subsystem_init(RISCVMSIRemState *s)
 static void fault_logger(RISCVMSIRemState *s, uint32_t msi_data,
                          uint8_t fault_code)
 {
+    /* Saturating perf_fault counter */
+    if (s->perf_fault < (1UL << 32)) {
+        s->perf_fault++;
+    }
+
     if (s->trace_mask & TRACE_MASK_FAULT) {
         trace_fault_logger(msi_data, fault_code);
     }
@@ -252,16 +284,41 @@ static void fault_logger(RISCVMSIRemState *s, uint32_t msi_data,
         chardev_log_fault(s, msi_data, fault_code);
     }
 
+    if (g_queue_get_length(s->staging_buffer) >= BH_PENDING_MAX) {
+        /* GQueue overflow */
+        s->status |= STATUS_OFLOW;
+        return;
+    }
+
     FaultLog *f = g_new(FaultLog, 1);
     f->fault_info = (uint64_t)msi_data << 32 | fault_code;
     f->timestamp_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+
     g_queue_push_tail(s->staging_buffer, f);
+
     /* Check if we need to schedule bottom half here */
 }
 
 /**
  * Translation Unit
  */
+
+static void clear_busy(struct rcu_head *rp)
+{
+    RISCVMSIRemState *s = container_of(rp, RISCVMSIRemState, rcu);
+    qemu_mutex_lock(&s->mutex);
+    qatomic_rcu_set(&s->status, s->status & ~STATUS_BUSY);
+    qemu_mutex_unlock(&s->mutex);
+}
+
+static void set_busy(struct rcu_head *rp)
+{
+    RISCVMSIRemState *s = container_of(rp, RISCVMSIRemState, rcu);
+    qemu_mutex_lock(&s->mutex);
+    qatomic_rcu_set(&s->status, s->status | STATUS_BUSY);
+    qemu_mutex_unlock(&s->mutex);
+}
+
 
 static void riscv_msirem_send_msi(RISCVMSIRemState *s, hwaddr imsic_addr, uint32_t eiid)
 {
@@ -273,6 +330,8 @@ static void riscv_msirem_send_msi(RISCVMSIRemState *s, hwaddr imsic_addr, uint32
         /* DMA access to IMSIC failed */
         fault_logger(s, eiid, FAULT_ACCESS_ERROR);
     }
+    /* Translation Process finished */
+    call_rcu1(&s->rcu, clear_busy);
 }
 
 /* IMSIC Delivery engine */
@@ -322,10 +381,11 @@ static void pgtb_walker(RISCVMSIRemState *s, uint32_t msi, uint8_t walk_depth)
     uint32_t eiid;
     uint8_t index, fault, priv, hart_idx, guest_idx;
 
+    call_rcu1(&s->rcu, set_busy);
     /* RCU Guard while reading the pgtb & register ptbr */
     /* This is reptitive as all memory operations already define RCU Guards */
     WITH_RCU_READ_LOCK_GUARD() {
-        /* Initially setting it ot root pgtb */
+        /* Setting up PPN from root pgtb */
         pgtb_base = qatomic_rcu_read(&s->ptbr);
         pgtb_base = pgtb_base >> PTBR_PPN_SHIFT & PTBR_PPN_MASK;
         pgtb_base <<= 12;
@@ -383,12 +443,11 @@ static void pgtb_walker(RISCVMSIRemState *s, uint32_t msi, uint8_t walk_depth)
         }
 
         eiid = pte >> PTE_EIID_SHIFT & PTE_EIID_MASK;
-        /* eiid of 0 is invalid */
+        /* eiid 0 is invalid */
         if (eiid) {
             hart_idx = pte >> PTE_HART_IDX_SHIFT & PTE_HART_IDX_MASK;
             guest_idx = pte >> PTE_GIDX_SHIFT & PTE_GIDX_MASK;
             priv = pte >> PTE_PRIV_SHIFT & PTE_PRIV_MASK;
-            /* Logging only valid EIID leaf ptes */
         }
     }
 
@@ -402,6 +461,7 @@ fault_exception:
     fault_logger(s, 0, fault);
 }
 
+/* Translate Mode */
 static void translate_msi(RISCVMSIRemState *s, uint32_t msi) {
     uint64_t mode = s->ptbr & PTBR_MODE_MASK;
 
@@ -454,11 +514,18 @@ static void cb_send_msi(void *opaque)
     reset_cb_timer(s);
 }
 
+/* Whenever there is a write to doorbell, it registers an msi for translation */
 static void register_msi(RISCVMSIRemState *s)
 {
-    uint32_t msi = (uint32_t) (s->doorbell & DOORBELL_MSI_MASK);
+    uint32_t msi = s->doorbell;
 
     s->last_msi = msi;
+
+    /* Incrementing till saturation */
+    if (s->perf_ctr < (1UL << 32)) {
+        s->perf_ctr++;
+    }
+
     if (s->trace_mask & TRACE_MASK_MSI_RX) {
         trace_register_msi(msi);
     }
@@ -533,7 +600,7 @@ static uint64_t riscv_msirem_read(void *opaque, hwaddr addr, unsigned size)
         case MSIREMAP_TRACE_MASK:
             return msirem->trace_mask;
         case MSIREMAP_BH_PENDING:
-            return msirem->bh_pending;
+            return g_queue_get_length(msirem->staging_buffer);
         case MSIREMAP_HOTPLUG_SEQ:
             return msirem->hotplug_seq;
     }
@@ -553,56 +620,91 @@ static void riscv_msirem_write(void *opaque, hwaddr addr, uint64_t data, unsigne
     /* If addr not writable, ignore the write */
     switch (addr) {
         case MSIREMAP_PTBR:
-            msirem->ptbr = data;
+            msirem->ptbr = data & PTBR_MASK;
+            if (msirem->ctrl & CTRL_EN) {
+                msirem->hotplug_seq++;
+            }
             break;
         case MSIREMAP_FLBR:
-            msirem->flbr = data;
+            msirem->flbr = data & FLBR_MASK;
             break;
         case MSIREMAP_FLQC:
-            msirem->flqc = data;
+            msirem->flqc = data & FLQC_MASK;
+            if (data & FLQC_CLR) {
+                msirem->flhead = 0;
+                msirem->fltail = 0;
+                msirem->status |= STATUS_QEMPTY;
+            }
+            if (data & FLQC_OFLOW_CLR) {
+                msirem->status &= ~STATUS_OFLOW;
+            }
             break;
         case MSIREMAP_FLTAIL:
-            msirem->fltail = data;
+            msirem->fltail = data & FLTAIL_MASK;
+            msirem->status &= ~STATUS_QFULL;
+            if (msirem->fltail == msirem->flhead) {
+                msirem->status |= STATUS_QEMPTY;
+            }
             break;
         case MSIREMAP_CTRL:
-            msirem->ctrl = data;
+            msirem->ctrl = data & CTRL_MASK;
+            if (data & CTRL_PERF_RST) {
+                msirem->perf_fault = 0;
+                msirem->perf_ctr = 0;
+            }
+            if (data & CTRL_SOFT_RST) {
+                qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
+            }
+            if (data & CTRL_FAULT_IRQEN) {
+                qemu_irq_raise(msirem->fault_irq);
+            }
             break;
         case MSIREMAP_IMSIC_BASE:
-            msirem->imsic_base = data;
+            msirem->imsic_base = data & IMSIC_BASE_MASK;
             break;
         case MSIREMAP_IMSIC_STRIDE:
-            msirem->imsic_stride = data;
+            msirem->imsic_stride = data & IMSIC_STRIDE_MASK;
             break;
         case MSIREMAP_IMSIC_PRIV_OFF:
-            msirem->imsic_priv_off = data;
+            msirem->imsic_priv_off = data & IMSIC_PRIV_OFF_MASK;
             break;
         case MSIREMAP_FAULT_INJ:
-            msirem->fault_inj = data;
+            if (msirem->ctrl & CTRL_TEST_MODE) {
+                msirem->fault_inj = data & FAULT_INJ_CODE_MASK;
+            }
             break;
         case MSIREMAP_PERF_CTR:
-            msirem->perf_ctr = data;
+            msirem->perf_ctr = data & PERF_CTR_COUNT_MASK;
             break;
         case MSIREMAP_PERF_FAULT:
-            msirem->perf_fault = data;
+            msirem->perf_fault = data & PERF_FAULT_COUNT_MASK;
             break;
         case MSIREMAP_COALESCE_NS:
             msirem->coalesce_ns = data;
             break;
         case MSIREMAP_COALESCE_MAX:
-            msirem->coalesce_max = data;
+            msirem->coalesce_max = data & COALESCE_MAX_MASK;
             break;
         case MSIREMAP_NOTIF_CTRL:
-            msirem->notif_ctrl = data;
+            msirem->notif_ctrl = data & NOTIF_CTRL_MASK;
+            if (msirem->notif_ctrl & NOTIF_CTRL_PWRDN_EN) {
+                qemu_system_powerdown_request();
+            } else if (msirem->notif_ctrl & NOTIF_CTRL_RESET_EN) {
+                qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
+            }
+
             break;
         case MSIREMAP_CHARDEV_CTRL:
-            msirem->chardev_ctrl = data;
+            msirem->chardev_ctrl = data & CHARDEV_CTRL_MASK;
             break;
         case MSIREMAP_TRACE_MASK:
-            msirem->trace_mask = data;
+            msirem->trace_mask = data & TRACE_MASK_ALL;
             break;
         case MSIREMAP_DOORBELL:
-            register_msi(msirem);
-            msirem->doorbell = data;
+            if (msirem->ctrl & CTRL_EN) {
+                msirem->doorbell = data & DOORBELL_MSI_MASK;
+                register_msi(msirem);
+            }
     }
 }
 
@@ -619,7 +721,9 @@ static const MemoryRegionOps riscv_msirem_ops = {
     }
 };
 
-/* Runstate functions i.e. reset, powerdown, cleanup */
+/**
+ * Runstate functions i.e. reset, powerdown, cleanup
+ */
 static void common_cleanup(RISCVMSIRemState *s)
 {
     FaultLog *f;
@@ -634,6 +738,8 @@ static void common_cleanup(RISCVMSIRemState *s)
 
     /* Clearing bottom half */
     qemu_bh_cancel(s->staging_buffer_bh);
+    /* Resetting timer */
+    reset_cb_timer(s);
 }
 
 static void riscv_msirem_powerdown(Notifier *notifier, void *data)
@@ -664,6 +770,7 @@ static void riscv_msirem_reset(void *opaque)
     s->notif_ctrl = 0;
     s->chardev_ctrl = 0;
     s->trace_mask = 0xf;
+    s->hotplug_seq = 0;
 
     common_cleanup(s);
 }
@@ -756,8 +863,6 @@ static VMStateDescription vmstate_riscv_msirem = {
         VMSTATE_UINT64(notif_ctrl, RISCVMSIRemState),
         VMSTATE_UINT64(chardev_ctrl, RISCVMSIRemState),
         VMSTATE_UINT64(trace_mask, RISCVMSIRemState),
-        VMSTATE_UINT64(bh_pending, RISCVMSIRemState),
-        VMSTATE_UINT64(hotplug_seq, RISCVMSIRemState),
         VMSTATE_UINT64(doorbell, RISCVMSIRemState),
         VMSTATE_END_OF_LIST()
     }

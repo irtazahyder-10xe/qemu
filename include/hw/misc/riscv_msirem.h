@@ -14,8 +14,9 @@ typedef struct RISCVMSIRemState RISCVMSIRemState;
 DECLARE_INSTANCE_CHECKER(RISCVMSIRemState, RISCV_MSIREM, TYPE_RISCV_MSIREM)
 
 /* MSI Remapper Total size */
-#define MSIREM_SIZE (1 << 12)
-#define COALESCE_BUFF_MAX 256
+#define MSIREM_SIZE         (1 << 12)
+#define COALESCE_BUFF_MAX   256
+#define BH_PENDING_MAX      64
 
 /* MSI Remapper Alias region size */
 #define MSIREM_ALIAS_SIZE   256
@@ -26,6 +27,7 @@ DECLARE_INSTANCE_CHECKER(RISCVMSIRemState, RISCV_MSIREM, TYPE_RISCV_MSIREM)
  */
 struct RISCVMSIRemState {
     /*< private >*/
+    struct rcu_head rcu;
     SysBusDevice parent;
 
     qemu_irq fault_irq;
@@ -38,7 +40,7 @@ struct RISCVMSIRemState {
     uint64_t cb_count;
     QEMUTimer cb_timer;         /*< Coalescing Buffer timer */
 
-    QemuMutex ptb_mutex;        /*< Page Table Mutex for RCU */
+    QemuMutex mutex;        /*< Page Table Mutex for RCU */
     Notifier powerdown;
 
     CharBackend debug_logger;
@@ -71,7 +73,6 @@ struct RISCVMSIRemState {
     uint64_t notif_ctrl;
     uint64_t chardev_ctrl;
     uint64_t trace_mask;
-    uint64_t bh_pending;
     uint64_t hotplug_seq;
     uint64_t doorbell;
 };
