@@ -1,5 +1,6 @@
 #include "qemu/osdep.h"
 #include "qemu/log.h"
+#include "qemu/rcu.h"
 #include "qemu/timer.h"
 #include "qemu/module.h"
 #include "qemu/main-loop.h"
@@ -19,9 +20,9 @@
 #include "trace.h"
 
 #define MSIREMAP_PTBR           0x000
-#define PTBR_PPN_MASK           ((1ULL << (51 - 8 + 1)) - 1)
+#define PTBR_PPN_MASK           ((1ULL << 44) - 1)
 #define PTBR_PPN_SHIFT          8
-#define PTBR_MDOE_MASK          0xF
+#define PTBR_MODE_MASK          0xF
 
 #define MSIREMAP_FLBR           0x008
 #define FLBR_QSIZE_MASK         0x1F
@@ -110,29 +111,22 @@
 #define MSIREMAP_DOORBELL       0xF00
 #define DOORBELL_MSI_MASK       ((1ULL << 32) - 1)
 
-/* TODO: Add logic to send msi */
-static void riscv_msirem_send_msi(RISCVMSIRemState *s)
-{
-    return;
-}
+#define PTE_VALID               (1ULL << 63)
+#define PTE_LEAF                (1ULL << 62)
+#define PTE_PPN_MASK            ((1ULL << 44) - 1)
+#define PTE_PPN_SHIFT           18
+#define PTE_HART_IDX_MASK       ((1ULL << 8) - 1)
+#define PTE_HART_IDX_SHIFT      54
+#define PTE_PRIV_MASK           0x3
+#define PTE_PRIV_SHIFT          52
+#define PTE_GIDX_MASK           ((1ULL << 8) - 1)
+#define PTE_GIDX_SHIFT          44
+#define PTE_EIID_MASK           ((1ULL << 32) - 1)
+#define PTE_EIID_SHIFT          12
+#define PTE_NONLEAF_PRIV_MASK   ((1ULL << 18) - 1)
+#define PTE_LEAF_PRIV_MASK      ((1ULL << 12) - 1)
 
-/* Timer functions */
-static void reset_timer(RISCVMSIRemState *s)
-{
-    if (s->coalesce_ns > 0) {
-        timer_mod_ns(&s->cb_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + s->coalesce_ns);
-    }
-}
-
-static void cb_send_msi(void *opaque)
-{
-    RISCVMSIRemState *s = RISCV_MSIREM(opaque);
-    /* TODO: Add logic to send all msi's curerntly in coalescing buffer */
-    for (uint64_t i = 0; i < s->coalesce_max; i++) {
-        riscv_msirem_send_msi(s);
-    }
-    reset_timer(s);
-}
+#define MSI_INDEX_MASK          ((1ULL << 8) - 1)
 
 /**
  * Fault subsystem
@@ -146,31 +140,31 @@ static void fault_sb_to_DRAM(void *opaque)
     uint64_t qsize, qsize_mask, next_flhead;
     FaultLog *f;
 
-    qsize = (s->flbr >> FLBR_QSIZE_SHIFT) & FLBR_QSIZE_MASK;
+    qsize = s->flbr >> FLBR_QSIZE_SHIFT & FLBR_QSIZE_MASK;
     qsize_mask = (1 << qsize) - 1;
     next_flhead = s->flhead + 1;
 
     /* Checking if there is a difference of 1 entry between next flhead and
      * current fltail. Otherwise DRAM ring buffer full, so not write to DRAM */
     if (((next_flhead + 1) & qsize_mask) != s->fltail) {
-        addr = (s->flbr >> FLBR_PPN_SHIFT) & FLBR_PPN_MASK;
+        addr = s->flbr >> FLBR_PPN_SHIFT & FLBR_PPN_MASK;
         addr <<= 12;
         addr += (hwaddr) (s->flhead << 4);
         f = g_queue_peek_head(s->staging_buffer);
         /* Saving the first double */
         address_space_stq_le(&address_space_memory, addr,
-                          f->fault_info,
-                          MEMTXATTRS_UNSPECIFIED, &res);
+                             f->fault_info,
+                             MEMTXATTRS_UNSPECIFIED, &res);
         if (res == MEMTX_OK) {
             /* Saving the second double */
             address_space_stq_le(&address_space_memory, addr + 8,
-                              f->timestamp_ns,
-                              MEMTXATTRS_UNSPECIFIED, &res);
-            /* This should never fail */
+                                 f->timestamp_ns,
+                                 MEMTXATTRS_UNSPECIFIED, &res);
+            /* If all records save correctly, removing fault from stagging buffer */
             if (res == MEMTX_OK) {
                 f = g_queue_pop_head(s->staging_buffer);
-                s->flhead = next_flhead & qsize_mask;
                 g_free(f);
+                s->flhead = next_flhead & qsize_mask;
             }
         }
     }
@@ -187,9 +181,203 @@ static void fault_logger(RISCVMSIRemState *s, uint8_t fault_code,
                          uint32_t msi_data)
 {
     FaultLog *f = g_new(FaultLog, 1);
-    f->fault_info = ((uint64_t) msi_data << 32) | fault_code;
+    f->fault_info = (uint64_t)msi_data << 32 | fault_code;
     f->timestamp_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     g_queue_push_tail(s->staging_buffer, f);
+    /* Check if we need to schedule bottom half here */
+}
+
+/**
+ * Translation Unit
+ */
+
+static void riscv_msirem_send_msi(RISCVMSIRemState *s, hwaddr imsic_addr, uint32_t eiid)
+{
+    MemTxResult res;
+    address_space_stq_le(&address_space_memory, imsic_addr,
+                         eiid, MEMTXATTRS_UNSPECIFIED, &res);
+
+    if (res != MEMTX_OK) {
+        /* DMA access to IMSIC failed */
+        fault_logger(s, FAULT_ACCESS_ERROR, eiid);
+    }
+}
+
+/* IMSIC Delivery engine */
+static void invoke_imsic_dengine(RISCVMSIRemState *s, uint32_t eiid,
+                                 uint8_t hart_idx, uint8_t guest_idx,
+                                 uint8_t priv)
+{
+    hwaddr imsic_addr;
+
+    if (priv > VSMODE) {
+        fault_logger(s, FAULT_INVALID_PRIV, eiid);
+        return;
+    }
+
+    imsic_addr = s->imsic_base & IMSIC_BASE_MASK;
+    imsic_addr += (s->imsic_stride & IMSIC_STRIDE_MASK) * hart_idx;
+
+    if (priv > MMODE) {
+        imsic_addr += s->imsic_priv_off & IMSIC_PRIV_OFF_MASK;
+    }
+    if (priv > SMODE) {
+        imsic_addr += (1 + guest_idx) * 0x1000;
+    }
+
+    riscv_msirem_send_msi(s, imsic_addr, eiid);
+}
+
+static inline uint64_t get_pte(hwaddr addr, hwaddr offset, MemTxResult *res)
+{
+    return address_space_ldq_le(&address_space_memory, addr + (offset << 3),
+                                MEMTXATTRS_UNSPECIFIED, res);
+}
+
+/* Page Table Walker */
+static void pgtb_walker(RISCVMSIRemState *s, uint32_t msi, uint8_t walk_depth)
+{
+    MemTxResult res;
+    uint64_t pte;
+    hwaddr pgtb_base, addr;
+    uint32_t eiid;
+    uint8_t index, fault, priv, hart_idx, guest_idx;
+
+    /* RCU Guard while reading the pgtb & register ptbr */
+    /* This is reptitive as all memory operations already define RCU Guards */
+    WITH_RCU_READ_LOCK_GUARD() {
+        /* Initially setting it ot root pgtb */
+        pgtb_base = qatomic_rcu_read(&s->ptbr);
+        pgtb_base = pgtb_base >> PTBR_PPN_SHIFT & PTBR_PPN_MASK;
+        pgtb_base <<= 12;
+
+        for (uint8_t i = 0; i < walk_depth; i++) {
+            addr = address_space_ldq_le(&address_space_memory, pgtb_base,
+                                        MEMTXATTRS_UNSPECIFIED, &res);
+            if (res != MEMTX_OK) {
+                /* Root page table is not configured */
+                fault_logger(s, FAULT_ACCESS_ERROR, 0);
+                return;
+            }
+
+            index = msi >> (i * 8) & MSI_INDEX_MASK;
+            pte = get_pte(addr, index, &res);
+            if (res != MEMTX_OK) {
+                /* PTE does not exist */
+                fault = FAULT_ACCESS_ERROR;
+                goto fault_exception;
+                return;
+            } else if (!(pte & PTE_VALID)) {
+                fault = FAULT_INVALID_PTE;
+                goto fault_exception;
+            } else if (i < walk_depth - 1) {
+                if (!(pte & PTE_LEAF)) {
+                    fault = FAULT_UNEXPECTED_LEAF;
+                    goto fault_exception;
+                } else if ((pte & PTE_NONLEAF_PRIV_MASK) != 0) {
+                    /* Found non-leaf pte's reserved bits to be 0 */
+                    fault = FAULT_RESERVED_BITS;
+                    goto fault_exception;
+                }
+            }
+
+            pgtb_base = pte >> PTE_PPN_SHIFT & PTE_PPN_MASK;
+            pgtb_base <<= 12;
+            s->total_pgtb_walk++;
+        }
+
+        /* After walking the walk_depth we should expect to see a leaf pte */
+        if ((pte & PTE_LEAF_PRIV_MASK) != 0) {
+            fault = FAULT_RESERVED_BITS;
+            goto fault_exception;
+        } else if (!(pte & PTE_LEAF)) {
+            fault = FAULT_EXPECTED_LEAF;
+            goto fault_exception;
+        }
+
+        eiid = pte >> PTE_EIID_SHIFT & PTE_EIID_MASK;
+        /* eiid of 0 is invalid */
+        if (eiid) {
+            hart_idx = pte >> PTE_HART_IDX_SHIFT & PTE_HART_IDX_MASK;
+            guest_idx = pte >> PTE_GIDX_SHIFT & PTE_GIDX_MASK;
+            priv = pte >> PTE_PRIV_SHIFT & PTE_PRIV_MASK;
+        }
+    }
+
+    if (eiid) {
+        invoke_imsic_dengine(s, eiid, hart_idx, guest_idx, priv);
+    }
+
+    return;
+
+fault_exception:
+    fault_logger(s, fault, 0);
+}
+
+static void translate_msi(RISCVMSIRemState *s, uint32_t msi) {
+    uint64_t mode = s->ptbr & PTBR_MODE_MASK;
+
+    switch (mode) {
+        case OFF:
+            /* MSI discarded and fault is logged in stagging buffer */
+            fault_logger(s, FAULT_MODE_OFF, msi);
+            break;
+        case BARE:
+            invoke_imsic_dengine(s, msi, 0, 0, MMODE);
+            break;
+        case REMAP_1:
+            pgtb_walker(s, msi, 1);
+            break;
+        case REMAP_2:
+            pgtb_walker(s, msi, 2);
+            break;
+        case REMAP_3:
+            pgtb_walker(s, msi, 3);
+            break;
+        default:
+            /* Similar effect to OFF */
+            fault_logger(s, FAULT_MODE_OFF, msi);
+            break;
+    }
+}
+
+/* Timer functions */
+static void reset_cb_timer(RISCVMSIRemState *s)
+{
+    if (s->coalesce_ns > 0) {
+        timer_mod_ns(&s->cb_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + s->coalesce_ns);
+    }
+}
+
+static void cb_send_msi(void *opaque)
+{
+    RISCVMSIRemState *s = RISCV_MSIREM(opaque);
+    for (uint64_t i = 0; i < s->cb_count; i++) {
+        translate_msi(s, s->cb[i]);
+    }
+
+    /* coalescing buffer is now cleared */
+    s->cb_count = 0;
+    reset_cb_timer(s);
+}
+
+static void register_msi(RISCVMSIRemState *s)
+{
+    uint32_t msi = (uint32_t) (s->doorbell & DOORBELL_MSI_MASK);
+
+    /* Put the msi in the coalescing buffer if it exists */
+    if (s->coalesce_ns != 0 && s->coalesce_max > 1) {
+        s->cb[s->cb_count++] = msi;
+
+        /* Checking if the coalescing buffer if full
+         * If it is full sending msi */
+        if (s->cb_count == s->coalesce_max) {
+            cb_send_msi(s);
+        }
+    } else {
+        /* Otherwise start the translation of msi immediately upon its arrival */
+        translate_msi(s, msi);
+    }
 }
 
 /**
@@ -312,7 +500,7 @@ static void riscv_msirem_write(void *opaque, hwaddr addr, uint64_t data, unsigne
             msirem->trace_mask = data;
             break;
         case MSIREMAP_DOORBELL:
-            riscv_msirem_send_msi(msirem);
+            register_msi(msirem);
             msirem->doorbell = data;
     }
 }
@@ -362,10 +550,61 @@ static void riscv_msirem_realize(DeviceState *dev, Error **errp)
     sysbus_init_irq(SYS_BUS_DEVICE(dev), &msirem->fault_irq);
 }
 
+/* Runstate functions i.e. reset, powerdown, cleanup */
+static void common_cleanup(RISCVMSIRemState *s)
+{
+    FaultLog *f;
+    /* Flush the coalecing buffer */
+    memset(&s->cb, 0, sizeof(uint64_t) * COALESCE_BUFF_MAX);
+
+    /* Flush fault logs in staging buffer */
+    while (!g_queue_is_empty(s->staging_buffer)) {
+        f = g_queue_pop_head(s->staging_buffer);
+        g_free(f);
+    }
+
+    /* Clearing bottom half */
+    qemu_bh_cancel(s->staging_buffer_bh);
+}
+
+static void riscv_msirem_powerdown(Notifier *notifier, void *data)
+{
+    RISCVMSIRemState *s = container_of(notifier, RISCVMSIRemState,
+                                       powerdown);
+    /* Perform cleanup */
+    common_cleanup(s);
+    /* Write power-down marker in fault log pointed by flhead - 1 */
+    fault_logger(s, POWER_DOWN_MARKER, 0);
+}
+
+static void riscv_msirem_reset(void *opaque)
+{
+    RISCVMSIRemState *s = RISCV_MSIREM(opaque);
+    /* Setting writable MMRs except FLBR and PTBR to 0x0 */
+    s->flqc = 0;
+    s->fltail = 0;
+    s->ctrl = 0;
+    s->imsic_base = 0;
+    s->imsic_stride = 0;
+    s->imsic_priv_off = 0;
+    s->fault_inj = 0;
+    s->perf_ctr = 0;
+    s->perf_fault = 0;
+    s->coalesce_ns = 0;
+    s->coalesce_max = 64;
+    s->notif_ctrl = 0;
+    s->chardev_ctrl = 0;
+    s->trace_mask = 0;
+
+    common_cleanup(s);
+}
+
 static void riscv_msirem_unrealize(DeviceState *dev)
 {
     RISCVMSIRemState *s = RISCV_MSIREM(dev);
+    common_cleanup(s);
     g_queue_free(s->staging_buffer);
+    qemu_bh_delete(s->staging_buffer_bh);
 }
 
 static Property riscv_msirem_properties[] = {
@@ -407,52 +646,13 @@ static VMStateDescription vmstate_riscv_msirem = {
     }
 };
 
-/* Runstate functions i.e. reset, powerdown, cleanup */
-static void common_cleanup(RISCVMSIRemState *s)
-{
-    /* Flush the coalecing buffer */
-    memset(&s->coalescing_buff, 0, sizeof(uint64_t) * COALESCE_BUFF_MAX);
-}
-
-static void riscv_msirem_cleanup(Notifier *notifier, void *data)
-{
-    RISCVMSIRemState *s = container_of(notifier, RISCVMSIRemState,
-                                       powerdown);
-    /* Perform cleanup */
-    common_cleanup(s);
-    /* Write power-down marker in fault log pointed by flhead - 1 */
-    fault_logger(s, POWER_DOWN_MARKER, NULL);
-}
-
-static void riscv_msirem_reset(void *opaque)
-{
-    RISCVMSIRemState *s = RISCV_MSIREM(opaque);
-    /* Setting writable MMRs except FLBR and PTBR to 0x0 */
-    s->flqc = 0;
-    s->fltail = 0;
-    s->ctrl = 0;
-    s->imsic_base = 0;
-    s->imsic_stride = 0;
-    s->imsic_priv_off = 0;
-    s->fault_inj = 0;
-    s->perf_ctr = 0;
-    s->perf_fault = 0;
-    s->coalesce_ns = 0;
-    s->coalesce_max = 64;
-    s->notif_ctrl = 0;
-    s->chardev_ctrl = 0;
-    s->trace_mask = 0;
-
-    common_cleanup(s);
-}
-
 static void riscv_msirem_instance_init (Object *obj)
 {
     RISCVMSIRemState *s = RISCV_MSIREM(obj);
     timer_init_ns(&s->cb_timer, QEMU_CLOCK_VIRTUAL, cb_send_msi, s);
     s->version = 0x10;
     fault_subsystem_init(s);
-    s->powerdown.notify = riscv_msirem_cleanup;
+    s->powerdown.notify = riscv_msirem_powerdown;
     qemu_register_powerdown_notifier(&s->powerdown);
     qemu_register_reset(riscv_msirem_reset, s);
     /* To powerdown qemu_system_powerdown_request */
@@ -471,23 +671,23 @@ static void riscv_msirem_get_pgtb_count(Object *obj, Visitor *v,
 static char *riscv_msirem_get_trans_mode(Object *obj, Error **errp)
 {
     RISCVMSIRemState *s = RISCV_MSIREM(obj);
-    uint8_t value = (uint8_t) (s->ptbr & PTBR_MDOE_MASK);
+    uint8_t value = (uint8_t) (s->ptbr & PTBR_MODE_MASK);
     const char *val;
 
     switch (value) {
-        case 0:
+        case OFF:
             val = "OFF";
             break;
-        case 1:
+        case BARE:
             val = "BARE";
             break;
-        case 2:
+        case REMAP_1:
             val = "REMAP-1";
             break;
-        case 3:
+        case REMAP_2:
             val = "REMAP-2";
             break;
-        case 4:
+        case REMAP_3:
             val = "REMAP-3";
             break;
         default:

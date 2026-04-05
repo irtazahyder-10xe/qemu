@@ -33,7 +33,9 @@ struct RISCVMSIRemState {
     GQueue *staging_buffer;
     QEMUBH *staging_buffer_bh;  /*< Stagging Buffer bottom half */
 
-    uint64_t coalescing_buff[COALESCE_BUFF_MAX];
+    /* Coalescing buffer */
+    uint64_t cb[COALESCE_BUFF_MAX];
+    uint64_t cb_count;
     QEMUTimer cb_timer;         /*< Coalescing Buffer timer */
 
     QemuMutex ptb_mutex;        /*< Page Table Mutex for RCU */
@@ -74,30 +76,31 @@ struct RISCVMSIRemState {
     uint64_t doorbell;
 };
 
-/**
- * Page Table Entry
- */
-typedef struct PTE {
-    bool valid;
-    bool leaf;
-    uint64_t ppn;
-    uint64_t eiid;
-    uint8_t hart_id;
-    uint8_t guest_idx;
-    uint8_t priv;
-} PTE;
-
 enum FaultCodes {
-FAULT_INVALID_PTE       = 0x01,
-FAULT_UNEXPECTED_LEAF   = 0x02,
-FAULT_EXPECTED_LEAF     = 0x03,
-FAULT_RESERVED_BITS     = 0x04,
-FAULT_INVALID_PRIV      = 0x05,
-FAULT_ACCESS_ERROR      = 0x06,
-FAULT_MODE_OFF          = 0x07,
-FAULT_DEVICE_DISABLE    = 0x08,
-POWER_DOWN_MARKER       = 0xFE,
-FAULT_INTERNAL_ERROR    = 0xFF
+    FAULT_INVALID_PTE       = 0x01,
+    FAULT_UNEXPECTED_LEAF   = 0x02,
+    FAULT_EXPECTED_LEAF     = 0x03,
+    FAULT_RESERVED_BITS     = 0x04,
+    FAULT_INVALID_PRIV      = 0x05,
+    FAULT_ACCESS_ERROR      = 0x06,
+    FAULT_MODE_OFF          = 0x07,
+    FAULT_DEVICE_DISABLE    = 0x08,
+    POWER_DOWN_MARKER       = 0xFE,
+    FAULT_INTERNAL_ERROR    = 0xFF
+};
+
+enum TranslationMode {
+    OFF,
+    BARE,
+    REMAP_1,
+    REMAP_2,
+    REMAP_3,
+};
+
+enum PrivLevel {
+    MMODE,
+    SMODE,
+    VSMODE,
 };
 
 typedef struct FaultLog {
