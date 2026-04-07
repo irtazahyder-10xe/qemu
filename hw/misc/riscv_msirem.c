@@ -390,7 +390,8 @@ static void pgtb_walker(RISCVMSIRemState *s, uint32_t msi, uint8_t walk_depth)
         pgtb_base = pgtb_base >> PTBR_PPN_SHIFT & PTBR_PPN_MASK;
         pgtb_base <<= 12;
 
-        for (uint8_t i = 0; i < walk_depth; i++) {
+        /* Index C is always index the final level pgtb */
+        for (uint8_t i = walk_depth - 1; i <= 0; i--) {
             addr = address_space_ldq_le(&address_space_memory, pgtb_base,
                                         MEMTXATTRS_UNSPECIFIED, &res);
             if (res != MEMTX_OK) {
