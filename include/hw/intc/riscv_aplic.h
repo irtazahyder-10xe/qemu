@@ -30,8 +30,9 @@ DECLARE_INSTANCE_CHECKER(RISCVAPLICState, RISCV_APLIC, TYPE_RISCV_APLIC)
 #define APLIC_MIN_SIZE            0x4000
 #define APLIC_SIZE_ALIGN(__x)     (((__x) + (APLIC_MIN_SIZE - 1)) & \
                                    ~(APLIC_MIN_SIZE - 1))
-#define APLIC_SIZE(__num_harts)   (APLIC_MIN_SIZE + \
-                                   APLIC_SIZE_ALIGN(32 * (__num_harts)))
+#define APLIC_SIZE(__num_harts,\
+                   __domain_count)(__domain_count * (APLIC_MIN_SIZE + \
+                                   APLIC_SIZE_ALIGN(32 * (__num_harts))))
 
 struct RISCVAPLICState {
     /*< private >*/

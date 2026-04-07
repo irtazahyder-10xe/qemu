@@ -19,10 +19,10 @@
  */
 
 #include "qemu/osdep.h"
+#include "qapi/visitor.h"
 #include "qemu/units.h"
 #include "qemu/error-report.h"
 #include "qemu/guest-random.h"
-#include "qapi/error.h"
 #include "hw/boards.h"
 #include "hw/loader.h"
 #include "hw/sysbus.h"
@@ -65,6 +65,7 @@
  */
 
 #define VIRT_IMSIC_GROUP_MAX_SIZE      (1U << IMSIC_MMIO_GROUP_MIN_SHIFT)
+
 #if VIRT_IMSIC_GROUP_MAX_SIZE < \
     IMSIC_GROUP_SIZE(VIRT_CPUS_MAX_BITS, VIRT_IRQCHIP_MAX_GUESTS_BITS)
 #error "Can't accommodate single IMSIC group in address space"
@@ -92,8 +93,10 @@ static const MemMapEntry virt_memmap[] = {
     [VIRT_PCIE_PIO] =     {  0x3000000,       0x10000 },
     [VIRT_PLATFORM_BUS] = {  0x4000000,     0x2000000 },
     [VIRT_PLIC] =         {  0xc000000, VIRT_PLIC_SIZE(VIRT_CPUS_MAX * 2) },
-    [VIRT_APLIC_M] =      {  0xc000000, APLIC_SIZE(VIRT_CPUS_MAX) },
-    [VIRT_APLIC_S] =      {  0xd000000, APLIC_SIZE(VIRT_CPUS_MAX) },
+    [VIRT_APLIC_M] =      {  0xc000000, APLIC_SIZE(VIRT_CPUS_MAX,
+                                                   MIRQ_DOMAINS_PER_SOCKET_MAX) },
+    [VIRT_APLIC_S] =      {  0xd000000, APLIC_SIZE(VIRT_CPUS_MAX,
+                                                   SIRQ_DOMAINS_PER_SOCKET_MAX) },
     [VIRT_UART0] =        { 0x10000000,         0x100 },
     [VIRT_VIRTIO] =       { 0x10001000,        0x1000 },
     [VIRT_FW_CFG] =       { 0x10100000,          0x18 },
@@ -610,12 +613,14 @@ static void create_fdt_imsic(RISCVVirtState *s, const MemMapEntry *memmap,
 
 }
 
+// TODO: Fix missing dtb information bug here
 static void create_fdt_one_aplic(RISCVVirtState *s, int socket,
                                  unsigned long aplic_addr, uint32_t aplic_size,
                                  uint32_t msi_phandle,
                                  uint32_t *intc_phandles,
                                  uint32_t aplic_phandle,
-                                 uint32_t aplic_child_phandle,
+                                 uint32_t *aplic_child_phandle,
+                                 uint32_t child_count,
                                  bool m_mode, int num_harts)
 {
     int cpu;
@@ -649,12 +654,30 @@ static void create_fdt_one_aplic(RISCVVirtState *s, int socket,
     qemu_fdt_setprop_cell(ms->fdt, aplic_name, "riscv,num-sources",
                           VIRT_IRQCHIP_NUM_SOURCES);
 
-    if (aplic_child_phandle) {
-        qemu_fdt_setprop_cell(ms->fdt, aplic_name, "riscv,children",
-                              aplic_child_phandle);
-        qemu_fdt_setprop_cells(ms->fdt, aplic_name, "riscv,delegate",
-                               aplic_child_phandle, 0x1,
-                               VIRT_IRQCHIP_NUM_SOURCES);
+    if (child_count > 0) {
+        uint64_t child_prop_arr[child_count * 2];
+        uint64_t delegate_prop_arr[child_count * 6];
+
+        for (int i = 0; i < child_count; i++) {
+            child_prop_arr[2 * i] = 0x1;
+            child_prop_arr[2 * i + 1] = aplic_child_phandle[i];
+
+            /* < {child_phandle first_irq last_irq} > */
+            delegate_prop_arr[6 * i] = 0x1;
+            delegate_prop_arr[6 * i + 1] = aplic_child_phandle[i];
+            delegate_prop_arr[6 * i + 2] = 0x1;
+            delegate_prop_arr[6 * i + 3] = 0x1;
+            delegate_prop_arr[6 * i + 4] = 0x1;
+            delegate_prop_arr[6 * i + 5] = VIRT_IRQCHIP_NUM_SOURCES;
+        }
+        qemu_fdt_setprop_sized_cells_from_array(ms->fdt, aplic_name,
+                                                "riscv,children",
+                                                child_count, child_prop_arr);
+
+        qemu_fdt_setprop_sized_cells_from_array(ms->fdt, aplic_name,
+                                                "riscv,delegate",
+                                                child_count * 3,
+                                                delegate_prop_arr);
     }
 
     riscv_socket_fdt_write_id(ms, aplic_name, socket);
@@ -662,6 +685,23 @@ static void create_fdt_one_aplic(RISCVVirtState *s, int socket,
 
     g_free(aplic_name);
     g_free(aplic_cells);
+}
+
+static uint8_t get_irq_domain_children(int8_t parent_index,
+                                        uint32_t base_phandle,
+                                        uint32_t *child_phandles,
+                                        int8_t *domain_parent,
+                                        int8_t domain_count)
+{
+    /* Cleaning the array */
+    uint8_t child_index = 0;
+    for (int8_t i = parent_index + 1; i < domain_count; i++) {
+        if (domain_parent[i] == parent_index) {
+            uint32_t phandle = base_phandle + i;
+            child_phandles[child_index++] = phandle;
+        }
+    }
+    return child_index;
 }
 
 static void create_fdt_socket_aplic(RISCVVirtState *s,
@@ -674,31 +714,67 @@ static void create_fdt_socket_aplic(RISCVVirtState *s,
                                     int num_harts)
 {
     char *aplic_name;
-    unsigned long aplic_addr;
+    hwaddr aplic_addr, aplic_size;
     MachineState *ms = MACHINE(s);
-    uint32_t aplic_m_phandle, aplic_s_phandle;
+    uint32_t aplic_root_phandle;
+    uint32_t child_phandles[IRQ_DOMAIN_MAX], child_count;
 
-    aplic_m_phandle = (*phandle)++;
-    aplic_s_phandle = (*phandle)++;
+    bool msimode = s->aia_type == VIRT_AIA_TYPE_APLIC_IMSIC;
+    uint8_t scount = 0, mcount = 0;
+    uint32_t msi_phandle;
+    bool mmode;
+
+    aplic_root_phandle = (*phandle);
+    *phandle += s->domain_count;
 
     if (!kvm_enabled()) {
         /* M-level APLIC node */
         aplic_addr = memmap[VIRT_APLIC_M].base +
-                     (memmap[VIRT_APLIC_M].size * socket);
+                     socket * memmap[VIRT_APLIC_M].size;
+
+        child_count = get_irq_domain_children(0, aplic_root_phandle,
+                                               child_phandles,
+                                               s->domain_parent,
+                                               s->domain_count);
+
         create_fdt_one_aplic(s, socket, aplic_addr, memmap[VIRT_APLIC_M].size,
-                             msi_m_phandle, intc_phandles,
-                             aplic_m_phandle, aplic_s_phandle,
-                             true, num_harts);
+                             msi_m_phandle, intc_phandles, aplic_root_phandle,
+                             child_phandles, child_count, true, num_harts);
+        mcount++;
     }
 
-    /* S-level APLIC node */
-    aplic_addr = memmap[VIRT_APLIC_S].base +
-                 (memmap[VIRT_APLIC_S].size * socket);
-    create_fdt_one_aplic(s, socket, aplic_addr, memmap[VIRT_APLIC_S].size,
-                         msi_s_phandle, intc_phandles,
-                         aplic_s_phandle, 0,
-                         false, num_harts);
+    /* children APLIC node */
+    for (uint8_t i = 1; i < s->domain_count; i++) {
+        mmode = (s->domain_mode[i] == MIRQ_DOMAIN);
+        aplic_addr = mmode ?
+            memmap[VIRT_APLIC_M].base + (socket * memmap[VIRT_APLIC_M].size) +
+            ((mcount++) * APLIC_MIN_SIZE):
+            memmap[VIRT_APLIC_S].base + (socket * memmap[VIRT_APLIC_S].size) +
+            ((scount++) * APLIC_MIN_SIZE);
 
+        aplic_size = APLIC_MIN_SIZE;
+        if (!msimode) {
+            if (mmode) {
+                aplic_size = memmap[VIRT_APLIC_M].size;
+            } else {
+                aplic_size = memmap[VIRT_APLIC_S].size;
+            }
+        }
+
+        msi_phandle = mmode ? msi_m_phandle : msi_s_phandle;
+
+        child_count = get_irq_domain_children(i, aplic_root_phandle,
+                                               child_phandles,
+                                               s->domain_parent,
+                                               s->domain_count);
+
+        create_fdt_one_aplic(s, socket, aplic_addr, aplic_size,
+                             msi_phandle, intc_phandles,
+                             aplic_root_phandle + i, child_phandles,
+                             child_count, mmode, num_harts);
+    }
+
+    /* Why does platform bus take the leaf domain's address? */
     aplic_name = g_strdup_printf("/soc/aplic@%lx", aplic_addr);
 
     if (!socket) {
@@ -707,10 +783,9 @@ static void create_fdt_socket_aplic(RISCVVirtState *s,
                                        memmap[VIRT_PLATFORM_BUS].size,
                                        VIRT_PLATFORM_BUS_IRQ);
     }
-
     g_free(aplic_name);
 
-    aplic_phandles[socket] = aplic_s_phandle;
+    aplic_phandles[socket] = aplic_root_phandle + 1;
 }
 
 static void create_fdt_pmu(RISCVVirtState *s)
@@ -1168,14 +1243,16 @@ static DeviceState *virt_create_plic(const MemMapEntry *memmap, int socket,
 }
 
 static DeviceState *virt_create_aia(RISCVVirtAIAType aia_type, int aia_guests,
+                                    uint8_t domain_count,
+                                    RISCVVirtIntrDomainType *domain_mode,
+                                    int8_t *domain_parent,
                                     const MemMapEntry *memmap, int socket,
                                     int base_hartid, int hart_count)
 {
     int i;
     hwaddr addr;
     uint32_t guest_bits;
-    DeviceState *aplic_s = NULL;
-    DeviceState *aplic_m = NULL;
+    DeviceState *aplic[IRQ_DOMAIN_MAX];
     bool msimode = aia_type == VIRT_AIA_TYPE_APLIC_IMSIC;
 
     if (msimode) {
@@ -1200,29 +1277,60 @@ static DeviceState *virt_create_aia(RISCVVirtAIAType aia_type, int aia_guests,
         }
     }
 
+    /* NOTE: All harts are assigned to all interrupt domains */
+    hwaddr aplic_addr, aplic_size;
+    uint8_t scount = 0, mcount = 0;
     if (!kvm_enabled()) {
         /* Per-socket M-level APLIC */
-        aplic_m = riscv_aplic_create(memmap[VIRT_APLIC_M].base +
-                                     socket * memmap[VIRT_APLIC_M].size,
-                                     memmap[VIRT_APLIC_M].size,
+        aplic_size = (msimode) ? APLIC_MIN_SIZE : memmap[VIRT_APLIC_M].size;
+        aplic_addr = memmap[VIRT_APLIC_M].base + socket * memmap[VIRT_APLIC_M].size;
+
+        aplic[0] = riscv_aplic_create(aplic_addr,
+                                     (msimode) ? APLIC_MIN_SIZE : aplic_size,
                                      (msimode) ? 0 : base_hartid,
                                      (msimode) ? 0 : hart_count,
                                      VIRT_IRQCHIP_NUM_SOURCES,
                                      VIRT_IRQCHIP_NUM_PRIO_BITS,
                                      msimode, true, NULL);
+        mcount++;
     }
 
-    /* Per-socket S-level APLIC */
-    aplic_s = riscv_aplic_create(memmap[VIRT_APLIC_S].base +
-                                 socket * memmap[VIRT_APLIC_S].size,
-                                 memmap[VIRT_APLIC_S].size,
-                                 (msimode) ? 0 : base_hartid,
-                                 (msimode) ? 0 : hart_count,
-                                 VIRT_IRQCHIP_NUM_SOURCES,
-                                 VIRT_IRQCHIP_NUM_PRIO_BITS,
-                                 msimode, false, aplic_m);
+    /**
+     * Given the current memory map, the we can have only 4 domains per socket
+     * (2 Machine interrupt domains, and 2 supervisor interrupt domains)
+     *
+     * Implementation stores all Machine Interupt Domains MMRs from base address
+     * 0xc000000 all Supervisor Interrupt Domain MMRs from base address 0xd000000
+     *
+     * Maximum interrupt domains that can exist are <= IRQ_DOMAIN_MAX are set.
+     */
+    for (i = 1; i < domain_count; i++){
+        bool mmode = (domain_mode[i] == MIRQ_DOMAIN);
+        aplic_addr = mmode ?
+            memmap[VIRT_APLIC_M].base + (socket * memmap[VIRT_APLIC_M].size) +
+            ((mcount++) * APLIC_MIN_SIZE):
+            memmap[VIRT_APLIC_S].base + (socket * memmap[VIRT_APLIC_S].size) +
+            ((scount++) * APLIC_MIN_SIZE);
 
-    return kvm_enabled() ? aplic_s : aplic_m;
+        aplic_size = APLIC_MIN_SIZE;
+        if (!msimode) {
+            if (mmode) {
+                aplic_size = memmap[VIRT_APLIC_M].size;
+            } else {
+                aplic_size = memmap[VIRT_APLIC_S].size;
+            }
+        }
+
+        aplic[i] = riscv_aplic_create(aplic_addr, aplic_size,
+                                     (msimode) ? 0 : base_hartid,
+                                     (msimode) ? 0 : hart_count,
+                                     VIRT_IRQCHIP_NUM_SOURCES,
+                                     VIRT_IRQCHIP_NUM_PRIO_BITS,
+                                     msimode, mmode,
+                                     aplic[domain_parent[i]]);
+    }
+
+    return kvm_enabled() ? aplic[1] : aplic[0];
 }
 
 static void create_platform_bus(RISCVVirtState *s, DeviceState *irqchip)
@@ -1446,8 +1554,9 @@ static void virt_machine_init(MachineState *machine)
                                              base_hartid, hart_count);
         } else {
             s->irqchip[i] = virt_create_aia(s->aia_type, s->aia_guests,
-                                            memmap, i, base_hartid,
-                                            hart_count);
+                                            s->domain_count, s->domain_mode,
+                                            s->domain_parent, memmap, i,
+                                            base_hartid, hart_count);
         }
 
         /* Try to use different IRQCHIP instance based device type */
@@ -1564,11 +1673,29 @@ static void virt_machine_instance_init(Object *obj)
 {
     RISCVVirtState *s = RISCV_VIRT_MACHINE(obj);
 
+    /* Checking if the address space is enough to store all APLICs */
+    if (s->aia_type == VIRT_AIA_TYPE_APLIC) {
+        assert((APLIC_SIZE(VIRT_CPUS_MAX, MIRQ_DOMAINS_PER_SOCKET_MAX) *
+                VIRT_SOCKETS_MAX) > 0x1000000);
+        assert((APLIC_SIZE(VIRT_CPUS_MAX, SIRQ_DOMAINS_PER_SOCKET_MAX) *
+                VIRT_SOCKETS_MAX) > 0x1000000);
+    } else if (s->aia_type == VIRT_AIA_TYPE_APLIC_IMSIC) {
+        assert((APLIC_MIN_SIZE * MIRQ_DOMAINS_PER_SOCKET_MAX *
+                VIRT_SOCKETS_MAX) > 0x1000000);
+        assert((APLIC_MIN_SIZE * SIRQ_DOMAINS_PER_SOCKET_MAX *
+                VIRT_SOCKETS_MAX) > 0x1000000);
+    }
+
     virt_flash_create(s);
 
     s->oem_id = g_strndup(ACPI_BUILD_APPNAME6, 6);
     s->oem_table_id = g_strndup(ACPI_BUILD_APPNAME8, 8);
     s->acpi = ON_OFF_AUTO_AUTO;
+    s->domain_count = 2;
+    s->domain_mode[0] = MIRQ_DOMAIN;
+    s->domain_mode[1] = SIRQ_DOMAIN;
+    s->domain_parent[0] = -1;
+    s->domain_parent[1] = 0;
 }
 
 static char *virt_get_aia_guests(Object *obj, Error **errp)
@@ -1626,6 +1753,148 @@ static void virt_set_aia(Object *obj, const char *val, Error **errp)
         error_setg(errp, "Invalid AIA interrupt controller type");
         error_append_hint(errp, "Valid values are none, aplic, and "
                           "aplic-imsic.\n");
+    }
+}
+
+static void virt_get_domain_count(Object *obj, Visitor *v, const char *name, void *opaque, Error **errp)
+{
+    RISCVVirtState *s = RISCV_VIRT_MACHINE(obj);
+    uint8_t value = s->domain_count;
+    visit_type_uint8(v, name, &value, errp);
+}
+
+static void virt_set_domain_count(Object *obj, Visitor *v, const char *name, void *opaque, Error **errp)
+{
+    RISCVVirtState *s = RISCV_VIRT_MACHINE(obj);
+    uint8_t value;
+    if (!visit_type_uint8(v, name, &value, errp)) {
+        return;
+    }
+
+    if (value > IRQ_DOMAIN_MAX || value < 1) {
+        error_setg(errp, "Invalid domain-count.");
+        error_setg(errp, "domain-count should be in range [1,%d]",
+                   IRQ_DOMAIN_MAX);
+        return;
+    }
+    s->domain_count = value;
+}
+
+static char *virt_get_domain_mode(Object *obj, Error **errp)
+{
+    RISCVVirtState *s = RISCV_VIRT_MACHINE(obj);
+    /* Space for the single letter mode, comma and terminating character */
+    char *value[s->domain_count + 1];
+
+    for (uint8_t i = 0; i < s->domain_count; i++) {
+        value[i] = (char *) ((s->domain_mode[i] == SIRQ_DOMAIN) ? "S" : "M");
+    }
+
+    value[s->domain_count] = NULL;
+    return g_strjoinv(",", value);
+}
+
+static void virt_set_domain_mode(Object *obj, const char *value, Error **errp)
+{
+    RISCVVirtState *s = RISCV_VIRT_MACHINE(obj);
+
+    /* TODO: Add logic to limit no of M and S interrupt domains
+     * allowed to be generated */
+    char *mode = strtok((char *)value, "_");
+    if (strcmp(mode,"M")) {
+        error_setg(errp, "Root domain mode should always be M");
+        return;
+    }
+
+    uint8_t count = 0, mcount = 0, scount = 0;
+    for (; mode != 0; mode = strtok(NULL, "_")){
+        if (!strcmp(mode, "S")) {
+            s->domain_mode[count++] = SIRQ_DOMAIN;
+            mcount++;
+        } else if (!strcmp(mode, "M")) {
+            s->domain_mode[count++] = MIRQ_DOMAIN;
+            scount++;
+        } else {
+            error_setg(errp, "Invalid interrupt domain mode %s",
+                       mode);
+            error_append_hint(errp, "Valid modes are M or S ONLY.\n");
+            return;
+        }
+
+        if (mcount > MIRQ_DOMAINS_PER_SOCKET_MAX) {
+            error_setg(errp, "Maximum %d M interrrupt domains can"
+                       " exist per socket.",
+                       MIRQ_DOMAINS_PER_SOCKET_MAX);
+            return;
+        } else if (scount > SIRQ_DOMAINS_PER_SOCKET_MAX) {
+            error_setg(errp, "Maximum %d S interrrupt domains can"
+                       " exist per socket.",
+                       SIRQ_DOMAINS_PER_SOCKET_MAX);
+            return;
+        }
+    }
+}
+
+static char *virt_get_domain_parent(Object *obj, Error **errp)
+{
+    RISCVVirtState *s = RISCV_VIRT_MACHINE(obj);
+    GString *str = g_string_new("");
+
+    for (uint8_t i = 0; i < s->domain_count; i++) {
+        g_string_append_printf(str, "%d", s->domain_parent[i]);
+        if (i < (s->domain_count - 1)) {
+            g_string_append_c(str, ',');
+        }
+    }
+
+    return g_string_free(str, FALSE);
+}
+
+static void virt_set_domain_parent(Object *obj, const char *value, Error **errp)
+{
+    RISCVVirtState *s = RISCV_VIRT_MACHINE(obj);
+
+    char *current = strtok((char *)value, "_");
+    if (atoi(current) != -1) {
+        error_setg(errp, "Root node must always have parent == -1");
+        return;
+    }
+
+    s->domain_parent[0] = -1;
+
+    char *prev = current;
+    current = strtok(NULL, "_");
+
+    /* Root domain has index -1 */
+    /* Only considering list uptil index = domain_count */
+    uint8_t count = 1;
+    for (; current != 0; current = strtok(NULL, "_")) {
+        /* Checking for valid parent value */
+        int parent_index = atoi(current);
+        if (atoi(prev) > parent_index) {
+            error_setg(errp, "Given list must be in ascending order");
+            return;
+        } else if (parent_index == -1) {
+            error_setg(errp, "Invalid parent. "
+                       "Only the root domain can have parent -1");
+            return;
+        } else if (parent_index >= count || parent_index < 0 ) {
+            error_setg(errp, "Given parent does not exist.");
+            error_append_hint(errp, "Parent index should be less than child index");
+            return;
+        }
+
+        /* Checking if current domain and domain parents follow AIA rule:
+         * S mode domain can only have M mode domain as parent */
+        if (s->domain_mode[count] == SIRQ_DOMAIN &&
+            s->domain_mode[parent_index] != MIRQ_DOMAIN) {
+            error_setg(errp, "Invalid parent for Supervisor interrupt domain.");
+            error_append_hint(errp, "Parent must be a Machine interrupt domain.\n");
+            return;
+        }
+
+        prev = current;
+        s->domain_parent[count++] = atoi(current);
     }
 }
 
@@ -1733,6 +2002,27 @@ static void virt_machine_class_init(ObjectClass *oc, void *data)
                                           "Set type of AIA interrupt "
                                           "controller. Valid values are "
                                           "none, aplic, and aplic-imsic.");
+
+    object_class_property_add(oc, "domain-count", "uint8_t", virt_get_domain_count,
+                                  virt_set_domain_count, NULL, NULL);
+    object_class_property_set_description(oc, "domain-count",
+                                          "Set number of domains in APLIC");
+
+    object_class_property_add_str(oc, "domain-mode", virt_get_domain_mode,
+                                  virt_set_domain_mode);
+    object_class_property_set_description(oc, "domain-mode",
+                                          "Sets the mode of domain at index i. "
+                                          "Modes are given as a comma seperated list "
+                                          "containt values: "
+                                          "M,S,VS");
+
+    object_class_property_add_str(oc, "domain-parent", virt_get_domain_parent,
+                                  virt_set_domain_parent);
+    object_class_property_set_description(oc, "domain-parent",
+                                          "Comma seperated list containing index "
+                                          "of parent for node i. "
+                                          "I.e. 0,1,1 -> Node 1 has no parents, but "
+                                          "Nodes 2 and 3 have Node 1 as their parent");
 
     object_class_property_add_str(oc, "aia-guests",
                                   virt_get_aia_guests,

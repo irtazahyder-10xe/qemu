@@ -24,10 +24,17 @@
 #include "hw/sysbus.h"
 #include "hw/block/flash.h"
 
-#define VIRT_CPUS_MAX_BITS             9
-#define VIRT_CPUS_MAX                  (1 << VIRT_CPUS_MAX_BITS)
-#define VIRT_SOCKETS_MAX_BITS          2
-#define VIRT_SOCKETS_MAX               (1 << VIRT_SOCKETS_MAX_BITS)
+#define VIRT_CPUS_MAX_BITS              9
+#define VIRT_CPUS_MAX                   (1 << VIRT_CPUS_MAX_BITS)
+#define VIRT_SOCKETS_MAX_BITS           2
+#define VIRT_SOCKETS_MAX                (1 << VIRT_SOCKETS_MAX_BITS)
+
+/* There is 1 APLIC generated per socket, these macro define
+ * the maximum of each type of domain in the APLIC */
+#define MIRQ_DOMAINS_PER_SOCKET_MAX     4
+#define SIRQ_DOMAINS_PER_SOCKET_MAX     4
+#define IRQ_DOMAIN_MAX                  (MIRQ_DOMAINS_PER_SOCKET_MAX +\
+                                         SIRQ_DOMAINS_PER_SOCKET_MAX)
 
 #define TYPE_RISCV_VIRT_MACHINE MACHINE_TYPE_NAME("virt")
 typedef struct RISCVVirtState RISCVVirtState;
@@ -39,6 +46,11 @@ typedef enum RISCVVirtAIAType {
     VIRT_AIA_TYPE_APLIC,
     VIRT_AIA_TYPE_APLIC_IMSIC,
 } RISCVVirtAIAType;
+
+typedef enum RISCVVirtIntrDomainType {
+    MIRQ_DOMAIN,
+    SIRQ_DOMAIN
+} RISCVVirtIntrDomainType;
 
 struct RISCVVirtState {
     /*< private >*/
@@ -56,6 +68,9 @@ struct RISCVVirtState {
     bool have_aclint;
     RISCVVirtAIAType aia_type;
     int aia_guests;
+    uint8_t domain_count;
+    RISCVVirtIntrDomainType domain_mode[IRQ_DOMAIN_MAX];
+    int8_t domain_parent[IRQ_DOMAIN_MAX];
     char *oem_id;
     char *oem_table_id;
     OnOffAuto acpi;
