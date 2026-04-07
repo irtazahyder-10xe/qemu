@@ -1624,7 +1624,7 @@ static void virt_machine_init(MachineState *machine)
     sifive_test_create(memmap[VIRT_TEST].base);
 
     /* MSI Remapper device */
-    riscv_msirem_create(memmap[VIRT_MSIREM].base);
+    riscv_msirem_create(memmap[VIRT_MSIREM].base, serial_hd(1));
 
     /* VirtIO MMIO devices */
     for (i = 0; i < VIRTIO_COUNT; i++) {

@@ -150,13 +150,13 @@ static void riscv_msirem_chardev_log_pte(RISCVMSIRemState *s, uint64_t pte)
     uint8_t hex_dump_msg[] = "PTE DUMP:\n";
     uint8_t char_buff[128];
     size_t len;
-    qemu_chr_fe_write(&s->debug_logger, hex_dump_msg, sizeof(hex_dump_msg));
+    qemu_chr_fe_write(&s->chardev, hex_dump_msg, sizeof(hex_dump_msg));
 
     if (s->chardev_ctrl & CHARDEV_CTRL_HEX_DUMP) {
         /* Converting the hex value to string and then storing it */
         len = snprintf((char *) char_buff, sizeof(char_buff),
                        "HEX: 0x%" PRIx64 "\n", pte);
-        qemu_chr_fe_write(&s->debug_logger, char_buff, len);
+        qemu_chr_fe_write(&s->chardev, char_buff, len);
     }
 
     if (s->chardev_ctrl & CHARDEV_CTRL_VERBOSE) {
@@ -164,7 +164,7 @@ static void riscv_msirem_chardev_log_pte(RISCVMSIRemState *s, uint64_t pte)
                        "Valid: %1d, Leaf: %1d, ",
                        !!(pte & PTE_VALID),
                        !!(pte & PTE_LEAF));
-        qemu_chr_fe_write(&s->debug_logger, char_buff, len);
+        qemu_chr_fe_write(&s->chardev, char_buff, len);
         if (pte & PTE_LEAF) {
             /* Verbose logging for leaf PPN */
             len = snprintf((char *) char_buff, sizeof(char_buff),
@@ -173,13 +173,13 @@ static void riscv_msirem_chardev_log_pte(RISCVMSIRemState *s, uint64_t pte)
                             pte >> PTE_GIDX_SHIFT & PTE_GIDX_MASK,
                             (uint32_t) (pte >> PTE_PRIV_SHIFT & PTE_PRIV_MASK),
                             pte >> PTE_EIID_SHIFT & PTE_EIID_MASK);
-            qemu_chr_fe_write(&s->debug_logger, char_buff, len);
+            qemu_chr_fe_write(&s->chardev, char_buff, len);
         } else {
             /* Verbose logging for non-leaf PPN */
             len = snprintf((char *) char_buff, sizeof(char_buff),
                            "PPN: 0x%" PRIx64 "\n",
                            pte >> PTE_PPN_SHIFT & PTE_PPN_MASK);
-            qemu_chr_fe_write(&s->debug_logger, char_buff, len);
+            qemu_chr_fe_write(&s->chardev, char_buff, len);
         }
     }
 }
@@ -190,15 +190,15 @@ static void riscv_msirem_chardev_log_fault(RISCVMSIRemState *s, uint32_t msi,
     uint8_t hex_dump_msg[] = "FAULT DUMP: ";
     uint8_t fault_err[32];
     size_t len;
-    qemu_chr_fe_write(&s->debug_logger, hex_dump_msg, sizeof(hex_dump_msg));
+    qemu_chr_fe_write(&s->chardev, hex_dump_msg, sizeof(hex_dump_msg));
 
     len = snprintf((char *) fault_err, sizeof(fault_err), "CODE: 0x%" PRIx8 "\n", fault_code);
-    qemu_chr_fe_write(&s->debug_logger, fault_err, len);
+    qemu_chr_fe_write(&s->chardev, fault_err, len);
 
     if (s->chardev_ctrl & CHARDEV_CTRL_VERBOSE) {
         len = snprintf((char *) fault_err, sizeof(fault_err), "MSI: 0x%" PRIx32 "\n",
                        fault_code);
-        qemu_chr_fe_write(&s->debug_logger, fault_err, len);
+        qemu_chr_fe_write(&s->chardev, fault_err, len);
     }
 }
 
@@ -276,11 +276,17 @@ static void riscv_msirem_fault_logger(RISCVMSIRemState *s, uint32_t msi_data,
         s->perf_fault++;
     }
 
+    s->status |= STATUS_FAULT;
+
     if (s->trace_mask & TRACE_MASK_FAULT) {
         trace_riscv_msirem_fault_logger(msi_data, fault_code);
     }
     if (s->chardev_ctrl & CHARDEV_CTRL_EN) {
         riscv_msirem_chardev_log_fault(s, msi_data, fault_code);
+    }
+
+    if (!(s->flqc & FLQC_EN)) {
+        return;
     }
 
     if (g_queue_get_length(s->staging_buffer) >= BH_PENDING_MAX) {
@@ -668,6 +674,8 @@ static void riscv_msirem_write(void *opaque, hwaddr addr, uint64_t data, unsigne
                 qemu_irq_raise(msirem->fault_irq);
             }
             if (data & CTRL_FAULT_CLR) {
+                msirem->status &= ~STATUS_FAULT;
+                msirem->flqc &= ~FLQC_IRQEN;
                 qemu_irq_lower(msirem->fault_irq);
             }
             break;
@@ -790,10 +798,10 @@ static void riscv_msirem_reset(void *opaque)
 static void chrdev_logger_event(void *opaque, QEMUChrEvent event)
 {
     RISCVMSIRemState *s = RISCV_MSIREM(opaque);
-    uint8_t end_msg[] = "START LOGGING END!";
+    uint8_t end_msg[] = "START LOGGING!";
 
     if (event == CHR_EVENT_OPENED) {
-        qemu_chr_fe_write(&s->debug_logger, end_msg, sizeof(end_msg));
+        qemu_chr_fe_write(&s->chardev, end_msg, sizeof(end_msg));
     }
 }
 
@@ -831,7 +839,7 @@ static void riscv_msirem_realize(DeviceState *dev, Error **errp)
     sysbus_init_mmio(SYS_BUS_DEVICE(dev), &msirem->mmio);
     sysbus_init_irq(SYS_BUS_DEVICE(dev), &msirem->fault_irq);
 
-    qemu_chr_fe_set_handlers(&msirem->debug_logger, NULL, NULL, chrdev_logger_event,
+    qemu_chr_fe_set_handlers(&msirem->chardev, NULL, NULL, chrdev_logger_event,
                              NULL, msirem, NULL, true);
 }
 
@@ -846,7 +854,7 @@ static void riscv_msirem_unrealize(DeviceState *dev)
 static Property riscv_msirem_properties[] = {
     DEFINE_PROP_UINT64("coalescing_window_timeout", RISCVMSIRemState, coalesce_ns, 0),
     DEFINE_PROP_UINT64("coalescing_window_size", RISCVMSIRemState, coalesce_max, 64),
-    DEFINE_PROP_CHR("debug-logger", RISCVMSIRemState, debug_logger),
+    DEFINE_PROP_CHR("chardev", RISCVMSIRemState, chardev),
     DEFINE_PROP_END_OF_LIST()
 };
 
@@ -972,9 +980,10 @@ static void riscv_msirem_register_type(void)
 
 type_init(riscv_msirem_register_type);
 
-DeviceState *riscv_msirem_create(hwaddr addr)
+DeviceState *riscv_msirem_create(hwaddr addr, Chardev *chr)
 {
     DeviceState *dev = qdev_new(TYPE_RISCV_MSIREM);
+    qdev_prop_set_chr(dev, "chardev", chr);
 
     sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, addr);

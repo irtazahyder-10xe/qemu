@@ -43,7 +43,7 @@ struct RISCVMSIRemState {
     QemuMutex mutex;        /*< Page Table Mutex for RCU */
     Notifier powerdown;
 
-    CharBackend debug_logger;
+    CharBackend chardev;
 
     uint64_t total_pgtb_walk;
 
@@ -109,4 +109,4 @@ typedef struct FaultLog {
     uint64_t timestamp_ns;
 } FaultLog;
 
-DeviceState *riscv_msirem_create(hwaddr addr);
+DeviceState *riscv_msirem_create(hwaddr addr, Chardev *chr);
