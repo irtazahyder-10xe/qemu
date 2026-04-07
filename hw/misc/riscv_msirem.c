@@ -376,10 +376,10 @@ static inline uint64_t get_pte(hwaddr addr, hwaddr offset, MemTxResult *res)
 static void pgtb_walker(RISCVMSIRemState *s, uint32_t msi, uint8_t walk_depth)
 {
     MemTxResult res;
-    uint64_t pte;
     hwaddr pgtb_base, addr;
     uint32_t eiid;
     uint8_t index, fault, priv, hart_idx, guest_idx;
+    uint64_t pte = 0;
 
     call_rcu1(&s->rcu, set_busy);
     /* RCU Guard while reading the pgtb & register ptbr */
