@@ -24,16 +24,17 @@
 #include "hw/sysbus.h"
 #include "hw/block/flash.h"
 
-#define VIRT_CPUS_MAX_BITS             9
-#define VIRT_CPUS_MAX_BITS_IMSIC_APLIC 7
-#define VIRT_CPUS_MAX                  (1 << VIRT_CPUS_MAX_BITS)
-#define VIRT_SOCKETS_MAX_BITS          2
-#define VIRT_SOCKETS_MAX               (1 << VIRT_SOCKETS_MAX_BITS)
-#define IRQ_DOMAIN_MAX                 (2 << (VIRT_CPUS_MAX_BITS - \
-                                        VIRT_CPUS_MAX_BITS_IMSIC_APLIC))
+#define VIRT_CPUS_MAX_BITS              9
+#define VIRT_CPUS_MAX                   (1 << VIRT_CPUS_MAX_BITS)
+#define VIRT_SOCKETS_MAX_BITS           2
+#define VIRT_SOCKETS_MAX                (1 << VIRT_SOCKETS_MAX_BITS)
 
-#define MIRQ_DOMAINS_PER_SOCKET_MAX        (IRQ_DOMAIN_MAX >> 1)
-#define SIRQ_DOMAINS_PER_SOCKET_MAX        (IRQ_DOMAIN_MAX >> 1)
+/* There is 1 APLIC generated per socket, these macro define
+ * the maximum of each type of domain in the APLIC */
+#define MIRQ_DOMAINS_PER_SOCKET_MAX     4
+#define SIRQ_DOMAINS_PER_SOCKET_MAX     4
+#define IRQ_DOMAIN_MAX                  (MIRQ_DOMAINS_PER_SOCKET_MAX +\
+                                         SIRQ_DOMAINS_PER_SOCKET_MAX)
 
 #define TYPE_RISCV_VIRT_MACHINE MACHINE_TYPE_NAME("virt")
 typedef struct RISCVVirtState RISCVVirtState;

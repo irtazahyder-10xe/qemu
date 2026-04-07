@@ -1673,6 +1673,19 @@ static void virt_machine_instance_init(Object *obj)
 {
     RISCVVirtState *s = RISCV_VIRT_MACHINE(obj);
 
+    /* Checking if the address space is enough to store all APLICs */
+    if (s->aia_type == VIRT_AIA_TYPE_APLIC) {
+        assert((APLIC_SIZE(VIRT_CPUS_MAX, MIRQ_DOMAINS_PER_SOCKET_MAX) *
+                VIRT_SOCKETS_MAX) > 0x1000000);
+        assert((APLIC_SIZE(VIRT_CPUS_MAX, SIRQ_DOMAINS_PER_SOCKET_MAX) *
+                VIRT_SOCKETS_MAX) > 0x1000000);
+    } else if (s->aia_type == VIRT_AIA_TYPE_APLIC_IMSIC) {
+        assert((APLIC_MIN_SIZE * MIRQ_DOMAINS_PER_SOCKET_MAX *
+                VIRT_SOCKETS_MAX) > 0x1000000);
+        assert((APLIC_MIN_SIZE * SIRQ_DOMAINS_PER_SOCKET_MAX *
+                VIRT_SOCKETS_MAX) > 0x1000000);
+    }
+
     virt_flash_create(s);
 
     s->oem_id = g_strndup(ACPI_BUILD_APPNAME6, 6);
@@ -1969,10 +1982,6 @@ static void virt_machine_class_init(ObjectClass *oc, void *data)
     mc->get_hotplug_handler = virt_machine_get_hotplug_handler;
 
     hc->plug = virt_machine_device_plug_cb;
-
-    /* Ensuring VIRT_APLIC_M and VIRT_APLIC_S regions do not overlap */
-    assert(VIRT_CPUS_MAX * MIRQ_DOMAINS_PER_SOCKET_MAX <= 0x1000000);
-    assert(VIRT_CPUS_MAX * SIRQ_DOMAINS_PER_SOCKET_MAX <= 0x1000000);
 
     machine_class_allow_dynamic_sysbus_dev(mc, TYPE_RAMFB_DEVICE);
 #ifdef CONFIG_TPM
