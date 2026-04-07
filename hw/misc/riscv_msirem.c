@@ -146,7 +146,7 @@
  * Chardev Logger
  */
 
-static void chardev_log_pte(RISCVMSIRemState *s, uint64_t pte)
+static void riscv_msirem_chardev_log_pte(RISCVMSIRemState *s, uint64_t pte)
 {
     uint8_t hex_dump_msg[] = "PTE DUMP:\n";
     uint8_t char_buff[128];
@@ -185,8 +185,8 @@ static void chardev_log_pte(RISCVMSIRemState *s, uint64_t pte)
     }
 }
 
-static void chardev_log_fault(RISCVMSIRemState *s, uint32_t msi,
-                              uint8_t fault_code)
+static void riscv_msirem_chardev_log_fault(RISCVMSIRemState *s, uint32_t msi,
+                                           uint8_t fault_code)
 {
     uint8_t hex_dump_msg[] = "FAULT DUMP: ";
     uint8_t fault_err[32];
@@ -207,7 +207,7 @@ static void chardev_log_fault(RISCVMSIRemState *s, uint32_t msi,
  * Fault subsystem
  */
 
-static void fault_sb_to_DRAM(void *opaque)
+static void riscv_msirem_fault_sb_to_DRAM(void *opaque)
 {
     RISCVMSIRemState *s = RISCV_MSIREM(opaque);
     MemTxResult res = MEMTX_OK;
@@ -216,7 +216,7 @@ static void fault_sb_to_DRAM(void *opaque)
     FaultLog *f;
 
     if (s->trace_mask & TRACE_MASK_BH) {
-        trace_fault_sb_to_DRAM();
+        trace_riscv_msirem_fault_sb_to_DRAM();
     }
 
     qsize = s->flbr >> FLBR_QSIZE_SHIFT & FLBR_QSIZE_MASK;
@@ -262,15 +262,15 @@ static void fault_sb_to_DRAM(void *opaque)
 
 }
 
-static void fault_subsystem_init(RISCVMSIRemState *s)
+static void riscv_msirem_fault_subsystem_init(RISCVMSIRemState *s)
 {
     s->staging_buffer = g_queue_new();
     /* Scheduling write from staging buffer -> DRAM to bottom half */
-    s->staging_buffer_bh = qemu_bh_new(fault_sb_to_DRAM, s);
+    s->staging_buffer_bh = qemu_bh_new(riscv_msirem_fault_sb_to_DRAM, s);
 }
 
-static void fault_logger(RISCVMSIRemState *s, uint32_t msi_data,
-                         uint8_t fault_code)
+static void riscv_msirem_fault_logger(RISCVMSIRemState *s, uint32_t msi_data,
+                                      uint8_t fault_code)
 {
     /* Saturating perf_fault counter */
     if (s->perf_fault < (1UL << 32)) {
@@ -278,10 +278,10 @@ static void fault_logger(RISCVMSIRemState *s, uint32_t msi_data,
     }
 
     if (s->trace_mask & TRACE_MASK_FAULT) {
-        trace_fault_logger(msi_data, fault_code);
+        trace_riscv_msirem_fault_logger(msi_data, fault_code);
     }
     if (s->chardev_ctrl & CHARDEV_CTRL_EN) {
-        chardev_log_fault(s, msi_data, fault_code);
+        riscv_msirem_chardev_log_fault(s, msi_data, fault_code);
     }
 
     if (g_queue_get_length(s->staging_buffer) >= BH_PENDING_MAX) {
@@ -303,7 +303,7 @@ static void fault_logger(RISCVMSIRemState *s, uint32_t msi_data,
  * Translation Unit
  */
 
-static void clear_busy(struct rcu_head *rp)
+static void msirem_status_clear_busy(struct rcu_head *rp)
 {
     RISCVMSIRemState *s = container_of(rp, RISCVMSIRemState, rcu);
     qemu_mutex_lock(&s->mutex);
@@ -311,7 +311,7 @@ static void clear_busy(struct rcu_head *rp)
     qemu_mutex_unlock(&s->mutex);
 }
 
-static void set_busy(struct rcu_head *rp)
+static void msirem_status_set_busy(struct rcu_head *rp)
 {
     RISCVMSIRemState *s = container_of(rp, RISCVMSIRemState, rcu);
     qemu_mutex_lock(&s->mutex);
@@ -320,7 +320,8 @@ static void set_busy(struct rcu_head *rp)
 }
 
 
-static void riscv_msirem_send_msi(RISCVMSIRemState *s, hwaddr imsic_addr, uint32_t eiid)
+static void riscv_msirem_send_msi(RISCVMSIRemState *s, hwaddr imsic_addr,
+                                  uint32_t eiid)
 {
     MemTxResult res;
     address_space_stq_le(&address_space_memory, imsic_addr,
@@ -328,22 +329,24 @@ static void riscv_msirem_send_msi(RISCVMSIRemState *s, hwaddr imsic_addr, uint32
 
     if (res != MEMTX_OK) {
         /* DMA access to IMSIC failed */
-        fault_logger(s, eiid, FAULT_ACCESS_ERROR);
+        riscv_msirem_fault_logger(s, eiid, FAULT_ACCESS_ERROR);
     }
     /* Translation Process finished */
-    call_rcu1(&s->rcu, clear_busy);
+    call_rcu1(&s->rcu, msirem_status_clear_busy);
 }
 
 /* IMSIC Delivery engine */
-static void invoke_imsic_dengine(RISCVMSIRemState *s, uint32_t eiid,
-                                 uint8_t hart_idx, uint8_t guest_idx,
-                                 uint8_t priv)
+static void riscv_msirem_invoke_imsic_dengine(RISCVMSIRemState *s,
+                                              uint32_t eiid,
+                                              uint8_t hart_idx,
+                                              uint8_t guest_idx,
+                                              uint8_t priv)
 {
     hwaddr imsic_addr;
     const char *priv_name = "Machine";
 
     if (priv > VSMODE) {
-        fault_logger(s, eiid, FAULT_INVALID_PRIV);
+        riscv_msirem_fault_logger(s, eiid, FAULT_INVALID_PRIV);
         return;
     }
 
@@ -360,20 +363,23 @@ static void invoke_imsic_dengine(RISCVMSIRemState *s, uint32_t eiid,
     }
 
     if (s->trace_mask & TRACE_MASK_DELIVER) {
-        trace_invoke_imsic_dengine(eiid, hart_idx, guest_idx, priv_name);
+        trace_riscv_msirem_invoke_imsic_dengine(eiid, hart_idx, guest_idx,
+                                                priv_name);
     }
 
     riscv_msirem_send_msi(s, imsic_addr, eiid);
 }
 
-static inline uint64_t get_pte(hwaddr addr, hwaddr offset, MemTxResult *res)
+static inline uint64_t riscv_msirem_get_pte(hwaddr addr, hwaddr offset,
+                                            MemTxResult *res)
 {
     return address_space_ldq_le(&address_space_memory, addr + (offset << 3),
                                 MEMTXATTRS_UNSPECIFIED, res);
 }
 
 /* Page Table Walker */
-static void pgtb_walker(RISCVMSIRemState *s, uint32_t msi, uint8_t walk_depth)
+static void riscv_msirem_pgtb_walker(RISCVMSIRemState *s, uint32_t msi,
+                                     uint8_t walk_depth)
 {
     MemTxResult res;
     hwaddr pgtb_base, addr;
@@ -381,7 +387,7 @@ static void pgtb_walker(RISCVMSIRemState *s, uint32_t msi, uint8_t walk_depth)
     uint8_t index, fault, priv, hart_idx, guest_idx;
     uint64_t pte = 0;
 
-    call_rcu1(&s->rcu, set_busy);
+    call_rcu1(&s->rcu, msirem_status_set_busy);
     /* RCU Guard while reading the pgtb & register ptbr */
     /* This is reptitive as all memory operations already define RCU Guards */
     WITH_RCU_READ_LOCK_GUARD() {
@@ -396,19 +402,20 @@ static void pgtb_walker(RISCVMSIRemState *s, uint32_t msi, uint8_t walk_depth)
                                         MEMTXATTRS_UNSPECIFIED, &res);
             if (res != MEMTX_OK) {
                 /* Root page table is not configured */
-                fault_logger(s, 0, FAULT_ACCESS_ERROR);
+                riscv_msirem_fault_logger(s, 0, FAULT_ACCESS_ERROR);
                 return;
             }
 
             index = msi >> (i * 8) & MSI_INDEX_MASK;
-            pte = get_pte(addr, index, &res);
+            pte = riscv_msirem_get_pte(addr, index, &res);
 
             if (s->trace_mask & TRACE_MASK_PTE_FETCH) {
-                trace_pgtb_walker((uint64_t) (addr + (index << 3)), pte);
+                trace_riscv_msirem_pgtb_walker((uint64_t) (addr + (index << 3)),
+                                               pte);
             }
 
             if (s->chardev_ctrl & CHARDEV_CTRL_EN) {
-                chardev_log_pte(s, pte);
+                riscv_msirem_chardev_log_pte(s, pte);
             }
 
             if (res != MEMTX_OK) {
@@ -452,40 +459,42 @@ static void pgtb_walker(RISCVMSIRemState *s, uint32_t msi, uint8_t walk_depth)
         }
     }
 
+    /* eiid 0 is invalid */
     if (eiid) {
-        invoke_imsic_dengine(s, eiid, hart_idx, guest_idx, priv);
+        riscv_msirem_invoke_imsic_dengine(s, eiid, hart_idx, guest_idx, priv);
     }
 
     return;
 
 fault_exception:
-    fault_logger(s, 0, fault);
+    riscv_msirem_fault_logger(s, 0, fault);
 }
 
 /* Translate Mode */
-static void translate_msi(RISCVMSIRemState *s, uint32_t msi) {
+static void riscv_msirem_translate_msi(RISCVMSIRemState *s, uint32_t msi)
+{
     uint64_t mode = s->ptbr & PTBR_MODE_MASK;
 
     switch (mode) {
         case OFF:
             /* MSI discarded and fault is logged in stagging buffer */
-            fault_logger(s, msi, FAULT_MODE_OFF);
+            riscv_msirem_fault_logger(s, msi, FAULT_MODE_OFF);
             break;
         case BARE:
-            invoke_imsic_dengine(s, msi, 0, 0, MMODE);
+            riscv_msirem_invoke_imsic_dengine(s, msi, 0, 0, MMODE);
             break;
         case REMAP_1:
-            pgtb_walker(s, msi, 1);
+            riscv_msirem_pgtb_walker(s, msi, 1);
             break;
         case REMAP_2:
-            pgtb_walker(s, msi, 2);
+            riscv_msirem_pgtb_walker(s, msi, 2);
             break;
         case REMAP_3:
-            pgtb_walker(s, msi, 3);
+            riscv_msirem_pgtb_walker(s, msi, 3);
             break;
         default:
             /* Similar effect to OFF */
-            fault_logger(s, msi, FAULT_MODE_OFF);
+            riscv_msirem_fault_logger(s, msi, FAULT_MODE_OFF);
             break;
     }
 }
@@ -498,16 +507,16 @@ static void reset_cb_timer(RISCVMSIRemState *s)
     }
 }
 
-static void cb_send_msi(void *opaque)
+static void riscv_msirem_cb_send_msi(void *opaque)
 {
     RISCVMSIRemState *s = RISCV_MSIREM(opaque);
 
     if (s->trace_mask & TRACE_MASK_COALESCE) {
-        trace_cb_flush();
+        trace_riscv_msirem_cb_flush();
     }
 
     for (uint64_t i = 0; i < s->cb_count; i++) {
-        translate_msi(s, s->cb[i]);
+        riscv_msirem_translate_msi(s, s->cb[i]);
     }
 
     /* coalescing buffer is now cleared */
@@ -516,7 +525,7 @@ static void cb_send_msi(void *opaque)
 }
 
 /* Whenever there is a write to doorbell, it registers an msi for translation */
-static void register_msi(RISCVMSIRemState *s)
+static void riscv_msirem_register_msi(RISCVMSIRemState *s)
 {
     uint32_t msi = s->doorbell;
 
@@ -528,24 +537,24 @@ static void register_msi(RISCVMSIRemState *s)
     }
 
     if (s->trace_mask & TRACE_MASK_MSI_RX) {
-        trace_register_msi(msi);
+        trace_riscv_msirem_register_msi(msi);
     }
     /* Put the msi in the coalescing buffer if it exists */
     if (s->coalesce_ns != 0 && s->coalesce_max > 1) {
         s->cb[s->cb_count++] = msi;
 
         if (s->trace_mask & TRACE_MASK_COALESCE) {
-            trace_cb_enqueue(s->cb_count, s->coalesce_max);
+            trace_riscv_msirem_cb_enqueue(s->cb_count, s->coalesce_max);
         }
 
         /* Checking if the coalescing buffer if full
          * If it is full sending msi */
         if (s->cb_count == s->coalesce_max) {
-            cb_send_msi(s);
+            riscv_msirem_cb_send_msi(s);
         }
     } else {
         /* Otherwise start the translation of msi immediately upon its arrival */
-        translate_msi(s, msi);
+        riscv_msirem_translate_msi(s, msi);
     }
 }
 
@@ -704,7 +713,7 @@ static void riscv_msirem_write(void *opaque, hwaddr addr, uint64_t data, unsigne
         case MSIREMAP_DOORBELL:
             if (msirem->ctrl & CTRL_EN) {
                 msirem->doorbell = data & DOORBELL_MSI_MASK;
-                register_msi(msirem);
+                riscv_msirem_register_msi(msirem);
             }
     }
 }
@@ -750,7 +759,7 @@ static void riscv_msirem_powerdown(Notifier *notifier, void *data)
     /* Perform cleanup */
     common_cleanup(s);
     /* Write power-down marker in fault log pointed by flhead - 1 */
-    fault_logger(s, 0, POWER_DOWN_MARKER);
+    riscv_msirem_fault_logger(s, 0, POWER_DOWN_MARKER);
 }
 
 static void riscv_msirem_reset(void *opaque)
@@ -876,9 +885,10 @@ static void riscv_msirem_instance_init (Object *obj)
     s->version = 0x10;
     s->trace_mask = 0xf;
 
-    timer_init_ns(&s->cb_timer, QEMU_CLOCK_VIRTUAL, cb_send_msi, s);
+    timer_init_ns(&s->cb_timer, QEMU_CLOCK_VIRTUAL,
+                  riscv_msirem_cb_send_msi, s);
 
-    fault_subsystem_init(s);
+    riscv_msirem_fault_subsystem_init(s);
 
     s->powerdown.notify = riscv_msirem_powerdown;
     qemu_register_powerdown_notifier(&s->powerdown);

@@ -332,10 +332,10 @@ iosb_read(int reg, uint64_t value, unsigned int size) "reg=0x%x value=0x%"PRIx64
 iosb_write(int reg, uint64_t value, unsigned int size) "reg=0x%x value=0x%"PRIx64" size=%u"
 
 # riscv_msirem.c
-register_msi(uint32_t msi) "MSI_DOORBELL: %d"
-pgtb_walker(uint64_t pte_addr, uint64_t pte) "MEMORY[0x%"PRIx64"]: 0x%"PRIx64
-invoke_imsic_dengine(uint32_t eiid, uint8_t hart_idx, uint8_t guest_idx, const char *priv) "eiid: 0x%x hart: %d guest_idx: %d priv: %s"
-fault_logger(uint32_t msi, uint8_t fault_code) "msi: 0x%x fault_code: 0x%x"
-cb_enqueue(uint64_t capacity, uint64_t max) "CB Enqueue: [%"PRIu64"/%"PRIu64"]"
-cb_flush(void) "CB Flushed"
-fault_sb_to_DRAM(void) "BH Executing: stagging buffer -> DRAM"
+riscv_msirem_register_msi(uint32_t msi) "MSI_DOORBELL: %d"
+riscv_msirem_pgtb_walker(uint64_t pte_addr, uint64_t pte) "MEMORY[0x%"PRIx64"]: 0x%"PRIx64
+riscv_msirem_invoke_imsic_dengine(uint32_t eiid, uint8_t hart_idx, uint8_t guest_idx, const char *priv) "eiid: 0x%x hart: %d guest_idx: %d priv: %s"
+riscv_msirem_fault_logger(uint32_t msi, uint8_t fault_code) "msi: 0x%x fault_code: 0x%x"
+riscv_msirem_cb_enqueue(uint64_t capacity, uint64_t max) "CB Enqueue: [%"PRIu64"/%"PRIu64"]"
+riscv_msirem_cb_flush(void) "CB Flushed"
+riscv_msirem_fault_sb_to_DRAM(void) "BH Executing: stagging buffer -> DRAM"
