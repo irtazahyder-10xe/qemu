@@ -32,8 +32,8 @@
 #define IRQ_DOMAIN_MAX                 (2 << (VIRT_CPUS_MAX_BITS - \
                                         VIRT_CPUS_MAX_BITS_IMSIC_APLIC))
 
-#define MIRQ_DOMAINS_PER_SOCKET_MAX        4
-#define SIRQ_DOMAINS_PER_SOCKET_MAX        4
+#define MIRQ_DOMAINS_PER_SOCKET_MAX        (IRQ_DOMAIN_MAX >> 1)
+#define SIRQ_DOMAINS_PER_SOCKET_MAX        (IRQ_DOMAIN_MAX >> 1)
 
 #define TYPE_RISCV_VIRT_MACHINE MACHINE_TYPE_NAME("virt")
 typedef struct RISCVVirtState RISCVVirtState;
