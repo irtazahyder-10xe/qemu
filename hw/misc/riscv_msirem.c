@@ -62,8 +62,7 @@
 #define CTRL_SOFT_RST           (1 << 4)
 #define CTRL_FAULT_IRQEN        (1 << 1)
 #define CTRL_EN                 0x1
-#define CTRL_MASK               (CTRL_TEST_MODE | CTRL_FAULT_CLR | \
-                                 CTRL_FAULT_IRQEN | CTRL_EN)
+#define CTRL_MASK               (CTRL_TEST_MODE | CTRL_FAULT_IRQEN | CTRL_EN)
 
 #define MSIREMAP_IMSIC_BASE     0x038
 #define IMSIC_BASE_MASK         ((1UL << 56) - 1)
@@ -667,6 +666,9 @@ static void riscv_msirem_write(void *opaque, hwaddr addr, uint64_t data, unsigne
             }
             if (data & CTRL_FAULT_IRQEN) {
                 qemu_irq_raise(msirem->fault_irq);
+            }
+            if (data & CTRL_FAULT_CLR) {
+                qemu_irq_lower(msirem->fault_irq);
             }
             break;
         case MSIREMAP_IMSIC_BASE:
