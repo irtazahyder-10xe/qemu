@@ -5,6 +5,7 @@
 #include "qemu/module.h"
 #include "qemu/main-loop.h"
 #include "qemu/error-report.h"
+#include "hw/resettable.h"
 #include "hw/irq.h"
 #include "hw/sysbus.h"
 #include "hw/qdev-properties.h"
@@ -12,7 +13,6 @@
 #include "hw/qdev-properties-system.h"
 #include "qapi/error.h"
 #include "qapi/visitor.h"
-#include "sysemu/reset.h"
 #include "sysemu/runstate.h"
 #include "exec/address-spaces.h"
 #include "qom/object.h"
@@ -147,6 +147,10 @@
 
 static void riscv_msirem_chardev_log_pte(RISCVMSIRemState *s, uint64_t pte)
 {
+    if (!qemu_chr_fe_backend_open(&s->chardev)) {
+        return;
+    }
+
     uint8_t hex_dump_msg[] = "PTE DUMP:\n";
     uint8_t char_buff[128];
     size_t len;
@@ -668,7 +672,7 @@ static void riscv_msirem_write(void *opaque, hwaddr addr, uint64_t data, unsigne
                 msirem->perf_ctr = 0;
             }
             if (data & CTRL_SOFT_RST) {
-                qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
+                resettable_reset(OBJECT(msirem), RESET_TYPE_COLD);
             }
             if (data & CTRL_FAULT_IRQEN) {
                 qemu_irq_raise(msirem->fault_irq);
@@ -710,7 +714,7 @@ static void riscv_msirem_write(void *opaque, hwaddr addr, uint64_t data, unsigne
             if (msirem->notif_ctrl & NOTIF_CTRL_PWRDN_EN) {
                 qemu_system_powerdown_request();
             } else if (msirem->notif_ctrl & NOTIF_CTRL_RESET_EN) {
-                qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
+                resettable_reset(OBJECT(msirem), RESET_TYPE_COLD);
             }
 
             break;
@@ -772,10 +776,16 @@ static void riscv_msirem_powerdown(Notifier *notifier, void *data)
     riscv_msirem_fault_logger(s, 0, POWER_DOWN_MARKER);
 }
 
-static void riscv_msirem_reset(void *opaque)
+static void riscv_msirem_reset_enter(Object *obj, ResetType type)
 {
-    RISCVMSIRemState *s = RISCV_MSIREM(opaque);
-    /* Setting writable MMRs except FLBR and PTBR to 0x0 */
+    RISCVMSIClass *class = RISCV_MSIREM_GET_CLASS(obj);
+    RISCVMSIRemState *s = RISCV_MSIREM(obj);
+
+    if (class->parent_phases.enter) {
+        class->parent_phases.enter(obj, type);
+    }
+
+    /* Setting writable MMRs to default values except FLBR and PTBR to 0x0 */
     s->flqc = 0;
     s->fltail = 0;
     s->ctrl = 0;
@@ -808,6 +818,7 @@ static void chrdev_logger_event(void *opaque, QEMUChrEvent event)
 /**
  * QOM
  */
+
 static void riscv_msirem_realize(DeviceState *dev, Error **errp)
 {
     RISCVMSIRemState *msirem = RISCV_MSIREM(dev);
@@ -847,8 +858,6 @@ static void riscv_msirem_unrealize(DeviceState *dev)
 {
     RISCVMSIRemState *s = RISCV_MSIREM(dev);
     common_cleanup(s);
-    g_queue_free(s->staging_buffer);
-    qemu_bh_delete(s->staging_buffer_bh);
 }
 
 static Property riscv_msirem_properties[] = {
@@ -902,9 +911,15 @@ static void riscv_msirem_instance_init (Object *obj)
 
     s->powerdown.notify = riscv_msirem_powerdown;
     qemu_register_powerdown_notifier(&s->powerdown);
-    qemu_register_reset(riscv_msirem_reset, s);
     /* To powerdown qemu_system_powerdown_request */
-    /* To soft reset qemu_system_reset_request */
+}
+
+static void riscv_msirem_instance_finalize(Object *obj)
+{
+    RISCVMSIRemState *s = RISCV_MSIREM(obj);
+    timer_del(&s->cb_timer);
+    qemu_bh_delete(s->staging_buffer_bh);
+    g_queue_free(s->staging_buffer);
 }
 
 static void riscv_msirem_get_pgtb_count(Object *obj, Visitor *v,
@@ -945,9 +960,11 @@ static char *riscv_msirem_get_trans_mode(Object *obj, Error **errp)
     return g_strdup(val);
 }
 
-static void riscv_msirem_class_init (ObjectClass *class, void *data)
+static void riscv_msirem_class_init (ObjectClass *klass, void *data)
 {
-    DeviceClass *dc = DEVICE_CLASS(class);
+    DeviceClass *dc = DEVICE_CLASS(klass);
+    RISCVMSIClass *class = RISCV_MSIREM_CLASS(klass);
+    ResettableClass *rc = RESETTABLE_CLASS(klass);
 
     dc->realize = riscv_msirem_realize;
     dc->desc = "MSI Remapper, performs MSI translation via page tables";
@@ -955,13 +972,17 @@ static void riscv_msirem_class_init (ObjectClass *class, void *data)
     dc->vmsd = &vmstate_riscv_msirem;
     device_class_set_props(dc, riscv_msirem_properties);
 
+    /* Adding resettable phases */
+    resettable_class_set_parent_phases(rc, riscv_msirem_reset_enter, NULL,
+                                       NULL, &class->parent_phases);
+
     /* Dynamic properties, these are read only properties for now.
      * By introducing a setter callback, we can also set these properties
      * but that not make sense for these properties */
-    object_class_property_add(class, "walk-count", "uint64_t",
+    object_class_property_add(klass, "walk-count", "uint64_t",
                               riscv_msirem_get_pgtb_count,
                               NULL, NULL, NULL);
-    object_class_property_add_str(class, "mode-name",
+    object_class_property_add_str(klass, "mode-name",
                                   riscv_msirem_get_trans_mode, NULL);
 }
 
@@ -970,7 +991,13 @@ static const TypeInfo riscv_msirem_info = {
     .parent = TYPE_SYS_BUS_DEVICE,
     .instance_size = sizeof(RISCVMSIRemState),
     .instance_init = riscv_msirem_instance_init,
-    .class_init = riscv_msirem_class_init
+    .class_size = sizeof(RISCVMSIClass),
+    .class_init = riscv_msirem_class_init,
+    .instance_finalize = riscv_msirem_instance_finalize,
+    .interfaces = (InterfaceInfo[]) {
+        { TYPE_RESETTABLE_INTERFACE },
+        {}
+        }
 };
 
 static void riscv_msirem_register_type(void)

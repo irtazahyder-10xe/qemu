@@ -10,8 +10,7 @@
 
 #define TYPE_RISCV_MSIREM "riscv.msiremap"
 
-typedef struct RISCVMSIRemState RISCVMSIRemState;
-DECLARE_INSTANCE_CHECKER(RISCVMSIRemState, RISCV_MSIREM, TYPE_RISCV_MSIREM)
+OBJECT_DECLARE_TYPE(RISCVMSIRemState, RISCVMSIClass, RISCV_MSIREM)
 
 /* MSI Remapper Total size */
 #define MSIREM_SIZE         (1 << 12)
@@ -25,6 +24,12 @@ DECLARE_INSTANCE_CHECKER(RISCVMSIRemState, RISCV_MSIREM, TYPE_RISCV_MSIREM)
 /**
  * MSI Remapper
  */
+
+struct RISCVMSIClass {
+    SysBusDeviceClass parent_class;
+    ResettablePhases parent_phases;
+};
+
 struct RISCVMSIRemState {
     /*< private >*/
     struct rcu_head rcu;
