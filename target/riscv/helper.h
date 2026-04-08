@@ -154,6 +154,11 @@ DEF_HELPER_FLAGS_3(hyp_hsv_w, TCG_CALL_NO_WG, void, env, tl, tl)
 DEF_HELPER_FLAGS_3(hyp_hsv_d, TCG_CALL_NO_WG, void, env, tl, tl)
 #endif
 
+/* MSI Remapper functions */
+DEF_HELPER_2(msirem_rd, tl, env, tl)
+DEF_HELPER_3(msirem_wr, void, env, tl, tl)
+DEF_HELPER_2(msirem_rdi, tl, env, i32)
+
 /* Vector functions */
 DEF_HELPER_3(vsetvl, tl, env, tl, tl)
 DEF_HELPER_5(vle8_v, void, ptr, ptr, tl, env, i32)

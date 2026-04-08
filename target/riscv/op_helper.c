@@ -543,3 +543,57 @@ target_ulong helper_hyp_hlvx_wu(CPURISCVState *env, target_ulong addr)
 }
 
 #endif /* !CONFIG_USER_ONLY */
+
+target_ulong helper_msirem_rd(CPURISCVState *env, target_ulong src) {
+    /* Loading base address from msirembase csr */
+    target_ulong base_addr;
+    uintptr_t raddr;
+    RISCVException ret = riscv_csrrw(env, 0x7c0, &base_addr, 0, 0);
+
+    if (ret != RISCV_EXCP_NONE) {
+        riscv_raise_exception(env, ret, GETPC());
+    }
+
+    if ((src << 3) > 0x1000) {
+        riscv_raise_exception(env, RISCV_EXCP_LOAD_ADDR_MIS, GETPC());
+    }
+
+    raddr = (uintptr_t) ((src << 3) + base_addr);
+    return cpu_ldq_data_ra(env, raddr, GETPC());
+}
+
+void helper_msirem_wr(CPURISCVState *env, target_ulong src1, target_ulong src2) {
+    /* Loading base address from msirembase csr */
+    target_ulong base_addr;
+    uintptr_t waddr;
+    RISCVException ret = riscv_csrrw(env, 0x7c0, &base_addr, 0, 0);
+
+    if (ret != RISCV_EXCP_NONE) {
+        riscv_raise_exception(env, ret, GETPC());
+    }
+
+    if ((src1 << 3) > 0x1000) {
+        riscv_raise_exception(env, RISCV_EXCP_STORE_AMO_ADDR_MIS, GETPC());
+    }
+
+    waddr = (uintptr_t) ((src1 << 3) + base_addr);
+    cpu_stq_data_ra(env, waddr, src2, GETPC());
+}
+
+target_ulong helper_msirem_rdi(CPURISCVState *env, uint32_t imm) {
+    /* Loading base address from msirembase csr */
+    target_ulong base_addr;
+    uintptr_t raddr;
+    RISCVException ret = riscv_csrrw(env, 0x7c0, &base_addr, 0, 0);
+
+    if (ret != RISCV_EXCP_NONE) {
+        riscv_raise_exception(env, ret, GETPC());
+    }
+
+    if ((imm & 0x00000007) != 0 || imm > 0x1000) {
+        riscv_raise_exception(env, RISCV_EXCP_LOAD_ADDR_MIS, GETPC());
+    }
+
+    raddr = (uintptr_t) (imm + base_addr);
+    return cpu_ldq_data_ra(env, raddr, GETPC());
+}

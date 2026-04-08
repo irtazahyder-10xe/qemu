@@ -347,6 +347,12 @@ hlv_wu    0110100  00001   ..... 100 ..... 1110011 @r2
 hlv_d     0110110  00000   ..... 100 ..... 1110011 @r2
 hsv_d     0110111  .....   ..... 100 00000 1110011 @r2_s
 
+# *** MSI Remapper custom instructions ***
+msirem_rd 0000000  00000   ..... 000 ..... 0001011 @r2
+msirem_wr 0000001  .....   ..... 001 00000 0001011 @r2_s
+msirem_rdi  ............   00000 010 ..... 0001011 %imm_i %rd
+msirem_fence 0000010 00000 00000 011 00000 0001011
+
 # *** Vector loads and stores are encoded within LOADFP/STORE-FP ***
 # Vector unit-stride load/store insns.
 vle8_v     ... 000 . 00000 ..... 000 ..... 0000111 @r2_nfvm

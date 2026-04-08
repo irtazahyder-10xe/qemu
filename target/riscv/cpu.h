@@ -247,6 +247,9 @@ struct CPUArchState {
     uint64_t mvien;
     uint64_t mvip;
 
+    /* MSI Remapper CSR */
+    uint64_t mmsirembase;
+
     /* Hypervisor CSRs */
     target_ulong hstatus;
     target_ulong hedeleg;

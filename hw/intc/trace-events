@@ -310,3 +310,6 @@ loongarch_msi_set_irq(int irq_num) "set msi irq %d"
 loongarch_extioi_setirq(int irq, int level) "set extirq irq %d level %d"
 loongarch_extioi_readw(uint64_t addr, uint64_t val) "addr: 0x%"PRIx64 "val: 0x%" PRIx64
 loongarch_extioi_writew(uint64_t addr, uint64_t val) "addr: 0x%"PRIx64 "val: 0x%" PRIx64
+
+# riscv_aplic.c
+riscv_aplic_msi_send(uint32_t hart_idx, uint32_t guest_idx, uint32_t eiid, const char *mode) "hart: %d guests_id: %d eiid: 0x%x mode: %s"

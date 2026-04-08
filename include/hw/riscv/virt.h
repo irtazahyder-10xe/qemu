@@ -25,9 +25,15 @@
 #include "hw/block/flash.h"
 
 #define VIRT_CPUS_MAX_BITS             9
+#define VIRT_CPUS_MAX_BITS_IMSIC_APLIC 7
 #define VIRT_CPUS_MAX                  (1 << VIRT_CPUS_MAX_BITS)
 #define VIRT_SOCKETS_MAX_BITS          2
 #define VIRT_SOCKETS_MAX               (1 << VIRT_SOCKETS_MAX_BITS)
+#define IRQ_DOMAIN_MAX                 (2 << (VIRT_CPUS_MAX_BITS - \
+                                        VIRT_CPUS_MAX_BITS_IMSIC_APLIC))
+
+#define MIRQ_DOMAINS_PER_SOCKET_MAX        4
+#define SIRQ_DOMAINS_PER_SOCKET_MAX        4
 
 #define TYPE_RISCV_VIRT_MACHINE MACHINE_TYPE_NAME("virt")
 typedef struct RISCVVirtState RISCVVirtState;
@@ -39,6 +45,11 @@ typedef enum RISCVVirtAIAType {
     VIRT_AIA_TYPE_APLIC,
     VIRT_AIA_TYPE_APLIC_IMSIC,
 } RISCVVirtAIAType;
+
+typedef enum RISCVVirtIntrDomainType {
+    MIRQ_DOMAIN,
+    SIRQ_DOMAIN
+} RISCVVirtIntrDomainType;
 
 struct RISCVVirtState {
     /*< private >*/
@@ -56,6 +67,9 @@ struct RISCVVirtState {
     bool have_aclint;
     RISCVVirtAIAType aia_type;
     int aia_guests;
+    uint8_t domain_count;
+    RISCVVirtIntrDomainType domain_mode[IRQ_DOMAIN_MAX];
+    int8_t domain_parent[IRQ_DOMAIN_MAX];
     char *oem_id;
     char *oem_table_id;
     OnOffAuto acpi;
@@ -82,7 +96,8 @@ enum {
     VIRT_PCIE_MMIO,
     VIRT_PCIE_PIO,
     VIRT_PLATFORM_BUS,
-    VIRT_PCIE_ECAM
+    VIRT_PCIE_ECAM,
+    VIRT_MSIREM,
 };
 
 enum {
@@ -92,6 +107,7 @@ enum {
     VIRTIO_COUNT = 8,
     PCIE_IRQ = 0x20, /* 32 to 35 */
     VIRT_PLATFORM_BUS_IRQ = 64, /* 64 to 95 */
+    MSIREM_FAULT_IRQ = 100,
 };
 
 #define VIRT_PLATFORM_BUS_NUM_IRQS 32
