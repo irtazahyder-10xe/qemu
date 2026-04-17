@@ -29,11 +29,14 @@
 #include "qemu/target-info.h"
 #include "qemu/bitops.h"
 
+#include "chardev/char-fe.h"
 #include "cpu_bits.h"
 #include "riscv-iommu.h"
 #include "riscv-iommu-bits.h"
 #include "riscv-iommu-hpm.h"
 #include "trace.h"
+
+#include "riscv_iommu_intf.h"
 
 #define LIMIT_CACHE_CTX               (1U << 7)
 #define LIMIT_CACHE_IOT               (1U << 20)
@@ -73,6 +76,91 @@ struct RISCVIOMMUEntry {
 
 /* IOMMU index for transactions without process_id specified. */
 #define RISCV_IOMMU_NOPROCID 0
+
+static MemTxResult qemu2rtl_read_ahb3lite(RISCVIOMMUState *s,
+                                          ahb3lite_strans_s *strans,
+                                          uint8_t *strans_buf)
+{
+    int chardev_status = qemu_chr_fe_read_all(&s->ahb3lite_fe, strans_buf,
+                                              SLAVE_TRANS_BYTES);
+    if (chardev_status == -1) {
+        /* Unable to read from socket */
+        return MEMTX_ERROR;
+    }
+
+    sbytes2trans(strans, strans_buf);
+    trace_qemu2rtl_ahb3lite_slave(strans->ahb3lite_hrdata,
+                                  strans->ahb3lite_hresp,
+                                  strans->ahb3lite_hreadyout);
+
+    /* If we receive hresp of 1, we throw memory error */
+    if (strans->ahb3lite_hresp == AHB3L_HRESP_ERROR) {
+        return MEMTX_ERROR;
+    }
+
+    return MEMTX_OK;
+}
+
+static MemTxResult qemu2rtl_ahb3lite(RISCVIOMMUState *s, uint32_t addr,
+                                     uint64_t wdata, bool is_double_access,
+                                     bool is_write, uint64_t *rdata)
+{
+    int chardev_status;
+    ahb3lite_mtrans_s mtrans;
+    ahb3lite_strans_s strans;
+    uint8_t mtrans_buf[MASTER_TRANS_BYTES];
+    uint8_t strans_buf[SLAVE_TRANS_BYTES];
+
+    if (qemu_chr_fe_backend_open(&s->ahb3lite_fe)) {
+        /* Charbackend is not open */
+        return MEMTX_ERROR;
+    }
+
+    mtrans.ahb3lite_hwrite = is_write;
+    mtrans.ahb3lite_hready = true;
+    mtrans.ahb3lite_hmastlock = false;
+    mtrans.ahb3lite_hsize = is_double_access ? AHB3L_HSIZE_32BIT :
+                                               AHB3L_HSIZE_64BIT;
+    mtrans.ahb3lite_hburst = AHB3L_HBURST_SINGLE; /* SINGLE */
+    mtrans.ahb3lite_htrans = AHB3L_HTRANS_NONSEQ; /* 2 => NONSEQ, 3 => SEQ */
+    mtrans.ahb3lite_hprot = AHB3L_HPROT_DEFAULT; /* Privileged + Data access */
+    mtrans.ahb3lite_haddr = addr;
+    mtrans.ahb3lite_hwdata = wdata;
+
+    mtrans2bytes(&mtrans, mtrans_buf);
+    chardev_status = qemu_chr_fe_write_all(&s->ahb3lite_fe, mtrans_buf,
+                                           MASTER_TRANS_BYTES);
+    trace_qemu2rtl_ahb3lite_master(mtrans.ahb3lite_hwdata,
+                                   mtrans.ahb3lite_haddr,
+                                   mtrans.ahb3lite_hsize,
+                                   mtrans.ahb3lite_hburst,
+                                   mtrans.ahb3lite_hprot,
+                                   mtrans.ahb3lite_htrans,
+                                   mtrans.ahb3lite_hwrite,
+                                   mtrans.ahb3lite_hmastlock,
+                                   mtrans.ahb3lite_hready);
+    if (chardev_status == -1) {
+        /* Unable to write to socket */
+        return MEMTX_ERROR;
+    }
+
+    if (qemu2rtl_read_ahb3lite(s, &strans, strans_buf) != MEMTX_OK) {
+        return MEMTX_ERROR;
+    }
+
+    /* We wait and keep reading until the readyout is 1 */
+    while (strans.ahb3lite_hreadyout == AHB3L_HREADY_WAIT) {
+        if (qemu2rtl_read_ahb3lite(s, &strans, strans_buf) != MEMTX_OK) {
+            return MEMTX_ERROR;
+        }
+    }
+
+    if (rdata) {
+        *rdata = strans.ahb3lite_hrdata;
+    }
+
+    return MEMTX_OK;
+}
 
 static uint8_t riscv_iommu_get_icvec_vector(uint32_t icvec, uint32_t vec_type)
 {
@@ -2324,7 +2412,9 @@ static MemTxResult riscv_iommu_mmio_write(void *opaque, hwaddr addr,
         process_fn(s);
     }
 
-    return MEMTX_OK;
+    return qemu2rtl_ahb3lite(s, addr, data,
+                             DOUBLE_ACCESS(size),
+                             AHB3L_HWRITE_WRITE, NULL);
 }
 
 static MemTxResult riscv_iommu_mmio_read(void *opaque, hwaddr addr,
@@ -2369,7 +2459,9 @@ static MemTxResult riscv_iommu_mmio_read(void *opaque, hwaddr addr,
 
     *data = val;
 
-    return MEMTX_OK;
+    return qemu2rtl_ahb3lite(s, addr, 0,
+                             DOUBLE_ACCESS(size),
+                             AHB3L_HWRITE_READ, data);
 }
 
 static const MemoryRegionOps riscv_iommu_mmio_ops = {
@@ -2603,6 +2695,11 @@ static void riscv_iommu_realize(DeviceState *dev, Error **errp)
             timer_new_ns(QEMU_CLOCK_VIRTUAL, riscv_iommu_hpm_timer_cb, s);
         s->hpm_event_ctr_map = g_hash_table_new(g_direct_hash, g_direct_equal);
     }
+
+    /* Initializing ahb3lite frontend */
+    qemu_chr_fe_init(&s->ahb3lite_fe, s->ahb3lite, errp);
+    qemu_chr_fe_set_handlers(&s->ahb3lite_fe, NULL, NULL, NULL,
+                             NULL, s, NULL, true);
 }
 
 static void riscv_iommu_unrealize(DeviceState *dev)
@@ -2664,6 +2761,8 @@ static const Property riscv_iommu_properties[] = {
     DEFINE_PROP_BOOL("g-stage", RISCVIOMMUState, enable_g_stage, TRUE),
     DEFINE_PROP_LINK("downstream-mr", RISCVIOMMUState, target_mr,
         TYPE_MEMORY_REGION, MemoryRegion *),
+    DEFINE_PROP_LINK("ahb3lite", RISCVIOMMUState, ahb3lite,
+                     TYPE_CHARDEV, Chardev *),
     DEFINE_PROP_UINT8("hpm-counters", RISCVIOMMUState, hpm_cntrs,
                       RISCV_IOMMU_IOCOUNT_NUM),
 };
