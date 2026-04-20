@@ -111,7 +111,7 @@ static MemTxResult qemu2rtl_ahb3lite(RISCVIOMMUState *s, uint32_t addr,
     uint8_t mtrans_buf[MASTER_TRANS_BYTES];
     uint8_t strans_buf[SLAVE_TRANS_BYTES];
 
-    if (qemu_chr_fe_backend_open(&s->ahb3lite_fe)) {
+    if (!qemu_chr_fe_backend_open(&s->ahb3lite_fe)) {
         /* Charbackend is not open */
         return MEMTX_ERROR;
     }
