@@ -8,15 +8,18 @@
 
 /* AHB-Lite 3 Protocol Macros */
 /* HTRANS: Transfer Type */
+#define AHB3L_HTRANS_MASK       0x3U
 #define AHB3L_HTRANS_IDLE       0x0U
 #define AHB3L_HTRANS_BUSY       0x1U
 #define AHB3L_HTRANS_NONSEQ     0x2U
 #define AHB3L_HTRANS_SEQ        0x3U
 
 /* HBURST: Burst Type */
+#define AHB3L_HBURST_MASK       0x7U
 #define AHB3L_HBURST_SINGLE     0x0U
 
 /* HSIZE: Transfer Size */
+#define AHB3L_HSIZE_MASK        0x7U
 #define AHB3L_HSIZE_32BIT       0x2U
 #define AHB3L_HSIZE_64BIT       0x3U
 
@@ -33,6 +36,7 @@
 #define AHB3L_HWRITE_WRITE      0x1U
 
 /* HPROT: Protection Control Bits */
+#define AHB3L_HPROT_MASK        0xfU
 #define AHB3L_HPROT_DATA        0x1U /* Bit 0: 1=Data, 0=Opcode */
 #define AHB3L_HPROT_PRIV        0x2U /* Bit 1: 1=Privileged, 0=User */
 #define AHB3L_HPROT_DEFAULT     (AHB3L_HPROT_DATA | AHB3L_HPROT_PRIV)
@@ -48,10 +52,11 @@ typedef struct ahb3lite_mtrans_s {
     bool ahb3lite_hready;
     bool ahb3lite_hmastlock;
 
-    uint8_t ahb3lite_hsize;
-    uint8_t ahb3lite_hburst;
-    uint8_t ahb3lite_htrans;
-    uint8_t ahb3lite_hprot;
+    /* We are using 32 bits to ensure alignment with SV svBitVecVal */
+    uint32_t ahb3lite_hsize;
+    uint32_t ahb3lite_hburst;
+    uint32_t ahb3lite_htrans;
+    uint32_t ahb3lite_hprot;
 
     uint32_t ahb3lite_haddr;
     uint64_t ahb3lite_hwdata;
@@ -69,6 +74,7 @@ typedef struct ahb3lite_strans_s {
 inline void mtrans2bytes(const ahb3lite_mtrans_s *trans, uint8_t *trans_buf)
 {
     if (!trans || !trans_buf) {
+        trans_buf = NULL;
         return;
     }
 
@@ -79,6 +85,7 @@ inline void mtrans2bytes(const ahb3lite_mtrans_s *trans, uint8_t *trans_buf)
 inline void strans2bytes(const ahb3lite_strans_s *trans, uint8_t *trans_buf)
 {
     if (!trans || !trans_buf) {
+        trans_buf = NULL;
         return;
     }
 
@@ -89,6 +96,7 @@ inline void strans2bytes(const ahb3lite_strans_s *trans, uint8_t *trans_buf)
 inline void mbytes2trans(ahb3lite_mtrans_s *trans, const uint8_t *trans_buf)
 {
     if (!trans || !trans_buf) {
+        trans = NULL;
         return;
     }
 
@@ -99,6 +107,7 @@ inline void mbytes2trans(ahb3lite_mtrans_s *trans, const uint8_t *trans_buf)
 inline void sbytes2trans(ahb3lite_strans_s *trans, const uint8_t *trans_buf)
 {
     if (!trans || !trans_buf) {
+        trans = NULL;
         return;
     }
 
