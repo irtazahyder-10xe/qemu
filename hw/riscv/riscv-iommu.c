@@ -77,6 +77,19 @@ struct RISCVIOMMUEntry {
 /* IOMMU index for transactions without process_id specified. */
 #define RISCV_IOMMU_NOPROCID 0
 
+static void ahb3lite_event_handler(void *opaque, QEMUChrEvent event)
+{
+    RISCVIOMMUState *s = opaque;
+    uint8_t buff[] = "qemu";
+    switch (event) {
+        case CHR_EVENT_OPENED:
+            qemu_chr_fe_write_all(&s->ahb3lite_fe, buff, sizeof(buff) - 1);
+            break;
+        default:
+            break;
+    }
+}
+
 static MemTxResult qemu2rtl_read_ahb3lite(RISCVIOMMUState *s,
                                           ahb3lite_strans_s *strans,
                                           uint8_t *strans_buf)
@@ -2698,7 +2711,7 @@ static void riscv_iommu_realize(DeviceState *dev, Error **errp)
 
     /* Initializing ahb3lite frontend */
     qemu_chr_fe_init(&s->ahb3lite_fe, s->ahb3lite, errp);
-    qemu_chr_fe_set_handlers(&s->ahb3lite_fe, NULL, NULL, NULL,
+    qemu_chr_fe_set_handlers(&s->ahb3lite_fe, NULL, NULL, ahb3lite_event_handler,
                              NULL, s, NULL, true);
 }
 
