@@ -132,8 +132,8 @@ static MemTxResult qemu2rtl_ahb3lite(RISCVIOMMUState *s, uint32_t addr,
     mtrans.ahb3lite_hwrite = is_write;
     mtrans.ahb3lite_hready = true;
     mtrans.ahb3lite_hmastlock = false;
-    mtrans.ahb3lite_hsize = is_double_access ? AHB3L_HSIZE_32BIT :
-                                               AHB3L_HSIZE_64BIT;
+    mtrans.ahb3lite_hsize = is_double_access ? AHB3L_HSIZE_64BIT :
+                                               AHB3L_HSIZE_32BIT;
     mtrans.ahb3lite_hburst = AHB3L_HBURST_SINGLE; /* SINGLE */
     mtrans.ahb3lite_htrans = AHB3L_HTRANS_NONSEQ; /* 2 => NONSEQ, 3 => SEQ */
     mtrans.ahb3lite_hprot = AHB3L_HPROT_DEFAULT; /* Privileged + Data access */
