@@ -97,6 +97,8 @@ struct RISCVIOMMUState {
     /* RTL Protocol backends */
     Chardev *ahb3lite;
     CharFrontend ahb3lite_fe;
+    Chardev *lti;
+    CharFrontend lti_fe;
 };
 
 void riscv_iommu_pci_setup_iommu(RISCVIOMMUState *iommu, PCIBus *bus,

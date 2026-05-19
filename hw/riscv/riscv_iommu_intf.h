@@ -51,6 +51,7 @@ typedef struct ahb3lite_mtrans_s {
     bool ahb3lite_hwrite;
     bool ahb3lite_hready;
     bool ahb3lite_hmastlock;
+    bool ahb3lite_hsel;
 
     /* We are using 32 bits to ensure alignment with SV svBitVecVal */
     uint32_t ahb3lite_hsize;
@@ -113,3 +114,58 @@ inline void sbytes2trans(ahb3lite_strans_s *trans, const uint8_t *trans_buf)
 
     memcpy(trans, trans_buf, SLAVE_TRANS_BYTES);
 }
+
+/* ============= AMBA LTI A Protocol ============= */
+/** @name Request Channel Signals
+ *
+ * LTI_LRUSER: {NPPN[43:0],NID[10:0]}
+ * @{
+ */
+#define LTI_LASID_DEVID_MASK    0xFFFFFFUL
+#define LTI_LASSID_PROCID_MASK  0xFFFFFUL
+/** @} */
+
+/** @name Response Channel Signals
+ *
+ * LTI_LRUSER: {NPPN[43:0],NID[10:0]}
+ * @{
+ */
+#define LTI_LRUSER_NPPN_MASK    0xFFFFFFFFFFFUL
+#define LTI_LRUSER_NPPN_OFFSET  0xB
+#define LTI_LRUSER_NID_MASK     0x7FFUL
+#define LTI_LUSER_MASK          ((LTI_LRUSER_NPPN_MASK << LTI_LRUSER_NPPN_OFFSET) | LTI_LRUSER_NID_MASK)
+/** @} */
+
+/* LTI Flow: For now only LTI_ATST and LTI_NO_STALL are supported */
+typedef enum lti_laflow_t {
+    LTI_FLOW_ATST = 1,
+    LTI_FLOW_NO_STALL = 2
+} lti_laflow_t;
+
+/* LTI Resp: Response can be one of Succes, MRIF Success or FAULT_ABORT */
+typedef enum lti_lrresp_t {
+    LTI_RESP_SUCCESS = 0,
+    LTI_RESP_MRIF_SUCCESS = 3,
+    LTI_RESP_FAULT_ABORT = 4
+} lti_lrresp_t;
+
+/* Response Channel */
+
+/* AHB3Lite Master Transaction */
+typedef struct LTI_LA_s{
+    uint64_t iova;
+    uint32_t dev_id;
+    uint32_t proc_id;
+    lti_laflow_t flow_type;
+    bool is_priv;
+    bool is_write;
+} LTI_LA_s;
+
+/* AHB3Lite Slave Transaction */
+typedef struct LTI_LR_s{
+    lti_lrresp_t resp;
+    uint64_t ppn;
+    /* MRIF fields */
+    uint64_t nppn;
+    uint32_t nid;
+} LTI_LR_s;

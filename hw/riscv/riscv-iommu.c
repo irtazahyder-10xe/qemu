@@ -77,13 +77,19 @@ struct RISCVIOMMUEntry {
 /* IOMMU index for transactions without process_id specified. */
 #define RISCV_IOMMU_NOPROCID 0
 
+/* AHB */
 static void ahb3lite_event_handler(void *opaque, QEMUChrEvent event)
 {
+    /* QEMU is master in AHB protocl, hence it sends the reqt (requestor) id
+     * to QRB on AHB_SOCK
+     *
+     * ID is sent when the QEMU serial port is opened, and it is the first item
+     * server expects to read when a client connects
+     */
     RISCVIOMMUState *s = opaque;
-    uint8_t buff[] = "qemu";
     switch (event) {
         case CHR_EVENT_OPENED:
-            qemu_chr_fe_write_all(&s->ahb3lite_fe, buff, sizeof(buff) - 1);
+            qemu_chr_fe_write_all(&s->ahb3lite_fe, (uint8_t *) "reqt", 4);
             break;
         default:
             break;
@@ -175,6 +181,54 @@ static MemTxResult qemu2rtl_ahb3lite(RISCVIOMMUState *s, uint32_t addr,
     return MEMTX_OK;
 }
 
+/* LTI */
+static void lti_event_handler(void *opaque, QEMUChrEvent event)
+{
+    /* QEMU is master in LTI protocl, hence it sends the reqt (requestor) id
+     * to QRB on LTI_SOCK
+     *
+     * ID is sent when the QEMU serial port is opened, and it is the first item
+     * server expects to read when a client connects
+     */
+    RISCVIOMMUState *s = opaque;
+    switch (event) {
+        case CHR_EVENT_OPENED:
+            qemu_chr_fe_write_all(&s->lti_fe, (uint8_t *) "reqt", 4);
+            break;
+        default:
+            break;
+    }
+}
+
+static void rtl_lti_translate(hwaddr addr, uint32_t dev_id, uint32_t proc_id,
+                              IOMMUAccessFlags flag, CharFrontend *lti_fe)
+{
+    LTI_LA_s req;
+    LTI_LR_s resp;
+    int chardev_status;
+
+    req.iova = addr;
+    req.dev_id = dev_id;
+    req.proc_id = proc_id;
+    req.flow_type = LTI_FLOW_NO_STALL;
+    req.is_priv = (flag & 0x8) >> 3;
+    req.is_write = (flag & 0x2) >> 1;
+
+    /* TODO: Add trace logic for resposne and request,
+     * TODO: Add appropriate error handling */
+    chardev_status = qemu_chr_fe_write_all(lti_fe, (uint8_t *)&req, sizeof(req));
+    if (chardev_status == -1) {
+        return;
+    }
+
+    chardev_status = qemu_chr_fe_read_all(lti_fe, (uint8_t*)&resp, sizeof(resp));
+    if (chardev_status == -1) {
+        return;
+    }
+}
+
+/* AXI */
+/* QEMU IOMMU */
 static uint8_t riscv_iommu_get_icvec_vector(uint32_t icvec, uint32_t vec_type)
 {
     switch (vec_type) {
@@ -2713,6 +2767,10 @@ static void riscv_iommu_realize(DeviceState *dev, Error **errp)
     qemu_chr_fe_init(&s->ahb3lite_fe, s->ahb3lite, errp);
     qemu_chr_fe_set_handlers(&s->ahb3lite_fe, NULL, NULL, ahb3lite_event_handler,
                              NULL, s, NULL, true);
+    /* Initializing lti frontend */
+    // qemu_chr_fe_init(&s->lti_fe, s->lti, errp);
+    // qemu_chr_fe_set_handlers(&s->lti_fe, NULL, NULL, lti_event_handler,
+    //                          NULL, s, NULL, true);
 }
 
 static void riscv_iommu_unrealize(DeviceState *dev)
@@ -2813,33 +2871,35 @@ static IOMMUTLBEntry riscv_iommu_memory_region_translate(
     IOMMUAccessFlags flag, int iommu_idx)
 {
     RISCVIOMMUSpace *as = container_of(iommu_mr, RISCVIOMMUSpace, iova_mr);
-    RISCVIOMMUContext *ctx;
-    void *ref;
+    rtl_lti_translate(addr, as->devid, iommu_idx, flag, &as->iommu->lti_fe);
     IOMMUTLBEntry iotlb = {
         .iova = addr,
         .target_as = as->iommu->target_as,
         .addr_mask = ~0ULL,
         .perm = flag,
     };
+    /* Bypassed */
+    // RISCVIOMMUContext *ctx;
+    // void *ref;
 
-    ctx = riscv_iommu_ctx(as->iommu, as->devid, iommu_idx, &ref);
-    if (ctx == NULL) {
-        /* Translation disabled or invalid. */
-        iotlb.addr_mask = 0;
-        iotlb.perm = IOMMU_NONE;
-    } else if (riscv_iommu_translate(as->iommu, ctx, &iotlb, true)) {
-        /* Translation disabled or fault reported. */
-        iotlb.addr_mask = 0;
-        iotlb.perm = IOMMU_NONE;
-    }
+    // ctx = riscv_iommu_ctx(as->iommu, as->devid, iommu_idx, &ref);
+    // if (ctx == NULL) {
+    //     /* Translation disabled or invalid. */
+    //     iotlb.addr_mask = 0;
+    //     iotlb.perm = IOMMU_NONE;
+    // } else if (riscv_iommu_translate(as->iommu, ctx, &iotlb, true)) {
+    //     /* Translation disabled or fault reported. */
+    //     iotlb.addr_mask = 0;
+    //     iotlb.perm = IOMMU_NONE;
+    // }
 
-    /* Trace all dma translations with original access flags. */
-    trace_riscv_iommu_dma(as->iommu->parent_obj.id, PCI_BUS_NUM(as->devid),
-                          PCI_SLOT(as->devid), PCI_FUNC(as->devid), iommu_idx,
-                          IOMMU_FLAG_STR[flag & IOMMU_RW], iotlb.iova,
-                          iotlb.translated_addr);
+    // /* Trace all dma translations with original access flags. */
+    // trace_riscv_iommu_dma(as->iommu->parent_obj.id, PCI_BUS_NUM(as->devid),
+    //                       PCI_SLOT(as->devid), PCI_FUNC(as->devid), iommu_idx,
+    //                       IOMMU_FLAG_STR[flag & IOMMU_RW], iotlb.iova,
+    //                       iotlb.translated_addr);
 
-    riscv_iommu_ctx_put(as->iommu, ref);
+    // riscv_iommu_ctx_put(as->iommu, ref);
 
     return iotlb;
 }
