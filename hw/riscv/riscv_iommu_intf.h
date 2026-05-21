@@ -166,6 +166,5 @@ typedef struct LTI_LR_s{
     lti_lrresp_t resp;
     uint64_t ppn;
     /* MRIF fields */
-    uint64_t nppn;
-    uint32_t nid;
+    uint64_t mrif_fields;
 } LTI_LR_s;

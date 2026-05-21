@@ -207,6 +207,7 @@ static void rtl_lti_translate(IOMMUTLBEntry *iotlb, uint32_t dev_id,
     LTI_LA_s req;
     LTI_LR_s resp;
     int chardev_status;
+    const char *resp_status;
 
     req.iova = iotlb->iova;
     req.dev_id = dev_id;
@@ -216,8 +217,11 @@ static void rtl_lti_translate(IOMMUTLBEntry *iotlb, uint32_t dev_id,
     req.is_priv = false;// (iotlb->flag & 0x8) >> 3;
     req.is_write = (iotlb->perm == IOMMU_WO);
 
-    /* TODO: Add trace logic for resposne and request,
-     * TODO: Add appropriate error handling */
+    /* TODO: Add appropriate error handling
+     * TODO: Update hard coded string when ATST flow supported */
+    trace_qemu2rtl_lti_req(req.iova, req.dev_id, req.proc_id, "NO_STALL",
+                           req.is_priv, req.is_write);
+
     chardev_status = qemu_chr_fe_write_all(lti_fe, (uint8_t *)&req, sizeof(req));
     if (chardev_status == -1) {
         return;
@@ -227,6 +231,22 @@ static void rtl_lti_translate(IOMMUTLBEntry *iotlb, uint32_t dev_id,
     if (chardev_status == -1) {
         return;
     }
+    switch (resp.resp) {
+        case LTI_RESP_SUCCESS:
+            resp_status = "SUCCESS";
+            break;
+        case LTI_RESP_MRIF_SUCCESS:
+            resp_status = "MRIF_SUCCESS";
+            break;
+        case LTI_RESP_FAULT_ABORT:
+            resp_status = "FAULT_ABORT";
+            break;
+        default:
+            resp_status = "INVALID_RESP";
+    }
+    trace_qemu2rtl_lti_resp(resp_status, resp.ppn, resp.mrif_fields,
+                            (resp.mrif_fields >> LTI_LRUSER_NPPN_OFFSET) & LTI_LRUSER_NPPN_MASK,
+                            resp.mrif_fields & LTI_LRUSER_NID_MASK);
 
     /* Translation successful, updating iotlb data structure with translated address */
     iotlb->translated_addr = resp.ppn;
