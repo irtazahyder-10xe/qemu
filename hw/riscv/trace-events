@@ -31,4 +31,4 @@ qemu2rtl_ahb3lite_slave(uint64_t hrdata, bool hresp, bool hreadyout) "[AHB] HRDA
 
 #LTI
 qemu2rtl_lti_req(uint64_t iova, uint32_t dev_id, uint32_t proc_id, const char *flow, bool is_priv, bool is_write) "[LTI] IOVA: 0x%"PRIx64" Device ID: %d Process ID: %d Flow: %s PRIV: %1d WRITE: %1d"
-qemu2rtl_lti_resp(const char *resp_status, uint64_t ppn, uint64_t mrif_fields, uint64_t mrif_ppn, uint32_t mrif_nid) "[LTI] RESP: %s PPN: 0x%"PRIx64" LR_USER_RAW: 0x%"PRIx64"MRIF PPN: 0x%"PRIx64" MRIF NID: %d"
+qemu2rtl_lti_resp(const char *resp_status, uint64_t ppn, uint64_t mrif_fields, uint64_t mrif_ppn, uint32_t mrif_nid) "[LTI] RESP: %s PPN: 0x%"PRIx64" LR_USER_RAW: 0x%"PRIx64" MRIF PPN: 0x%"PRIx64" MRIF NID: %d"

@@ -250,6 +250,9 @@ static void rtl_lti_translate(IOMMUTLBEntry *iotlb, uint32_t dev_id,
 
     /* Translation successful, updating iotlb data structure with translated address */
     iotlb->translated_addr = resp.ppn;
+    /* The address mask depends on which level the PTE was found i.e. superpage or 4KB page
+     * defaulting the mask to 4KB page*/
+    iotlb->addr_mask = ~TARGET_PAGE_MASK;
 }
 
 /* AXI */
