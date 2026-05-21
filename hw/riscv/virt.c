@@ -1738,8 +1738,13 @@ static void virt_machine_init(MachineState *machine)
                                  riscv_is_32bit(&s->soc[0]) ? 34 : 56,
                                  &error_fatal);
         /* AHB3Lite chardev */
+        /* TODO: Find using propertie name instead of expecting the order */
         object_property_set_link(OBJECT(iommu_sys), "ahb3lite",
                                  OBJECT(serial_hd(1)),
+                                 &error_fatal);
+        /* LTI-A chardev */
+        object_property_set_link(OBJECT(iommu_sys), "lti",
+                                 OBJECT(serial_hd(2)),
                                  &error_fatal);
         sysbus_realize_and_unref(SYS_BUS_DEVICE(iommu_sys), &error_fatal);
     }

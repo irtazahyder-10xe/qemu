@@ -34,6 +34,7 @@
 #include "riscv-iommu.h"
 #include "riscv-iommu-bits.h"
 #include "riscv-iommu-hpm.h"
+#include "system/memory.h"
 #include "trace.h"
 
 #include "riscv_iommu_intf.h"
@@ -200,19 +201,20 @@ static void lti_event_handler(void *opaque, QEMUChrEvent event)
     }
 }
 
-static void rtl_lti_translate(hwaddr addr, uint32_t dev_id, uint32_t proc_id,
-                              IOMMUAccessFlags flag, CharFrontend *lti_fe)
+static void rtl_lti_translate(IOMMUTLBEntry *iotlb, uint32_t dev_id,
+                              uint32_t proc_id, CharFrontend *lti_fe)
 {
     LTI_LA_s req;
     LTI_LR_s resp;
     int chardev_status;
 
-    req.iova = addr;
+    req.iova = iotlb->iova;
     req.dev_id = dev_id;
     req.proc_id = proc_id;
     req.flow_type = LTI_FLOW_NO_STALL;
-    req.is_priv = (flag & 0x8) >> 3;
-    req.is_write = (flag & 0x2) >> 1;
+    /* For now keeping translations as unprivileged access */
+    req.is_priv = false;// (iotlb->flag & 0x8) >> 3;
+    req.is_write = (iotlb->perm == IOMMU_WO);
 
     /* TODO: Add trace logic for resposne and request,
      * TODO: Add appropriate error handling */
@@ -225,6 +227,9 @@ static void rtl_lti_translate(hwaddr addr, uint32_t dev_id, uint32_t proc_id,
     if (chardev_status == -1) {
         return;
     }
+
+    /* Translation successful, updating iotlb data structure with translated address */
+    iotlb->translated_addr = resp.ppn;
 }
 
 /* AXI */
@@ -1713,6 +1718,8 @@ static RISCVIOMMUTransTag riscv_iommu_get_transtag(RISCVIOMMUContext *ctx)
     }
 }
 
+/* This function should never be invoked when RTL is being used as IOMMU */
+/* This function only sets iotlb values when there is a cache hit */
 static int riscv_iommu_translate(RISCVIOMMUState *s, RISCVIOMMUContext *ctx,
     IOMMUTLBEntry *iotlb, bool enable_cache)
 {
@@ -2768,9 +2775,9 @@ static void riscv_iommu_realize(DeviceState *dev, Error **errp)
     qemu_chr_fe_set_handlers(&s->ahb3lite_fe, NULL, NULL, ahb3lite_event_handler,
                              NULL, s, NULL, true);
     /* Initializing lti frontend */
-    // qemu_chr_fe_init(&s->lti_fe, s->lti, errp);
-    // qemu_chr_fe_set_handlers(&s->lti_fe, NULL, NULL, lti_event_handler,
-    //                          NULL, s, NULL, true);
+    qemu_chr_fe_init(&s->lti_fe, s->lti, errp);
+    qemu_chr_fe_set_handlers(&s->lti_fe, NULL, NULL, lti_event_handler,
+                             NULL, s, NULL, true);
 }
 
 static void riscv_iommu_unrealize(DeviceState *dev)
@@ -2834,6 +2841,8 @@ static const Property riscv_iommu_properties[] = {
         TYPE_MEMORY_REGION, MemoryRegion *),
     DEFINE_PROP_LINK("ahb3lite", RISCVIOMMUState, ahb3lite,
                      TYPE_CHARDEV, Chardev *),
+    DEFINE_PROP_LINK("lti", RISCVIOMMUState, lti,
+                     TYPE_CHARDEV, Chardev *),
     DEFINE_PROP_UINT8("hpm-counters", RISCVIOMMUState, hpm_cntrs,
                       RISCV_IOMMU_IOCOUNT_NUM),
 };
@@ -2871,7 +2880,6 @@ static IOMMUTLBEntry riscv_iommu_memory_region_translate(
     IOMMUAccessFlags flag, int iommu_idx)
 {
     RISCVIOMMUSpace *as = container_of(iommu_mr, RISCVIOMMUSpace, iova_mr);
-    rtl_lti_translate(addr, as->devid, iommu_idx, flag, &as->iommu->lti_fe);
     IOMMUTLBEntry iotlb = {
         .iova = addr,
         .target_as = as->iommu->target_as,
@@ -2900,6 +2908,7 @@ static IOMMUTLBEntry riscv_iommu_memory_region_translate(
     //                       iotlb.translated_addr);
 
     // riscv_iommu_ctx_put(as->iommu, ref);
+    rtl_lti_translate(&iotlb, as->devid, iommu_idx, &as->iommu->lti_fe);
 
     return iotlb;
 }
