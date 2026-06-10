@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <string.h>
 
+// TODO: Update naming scheme for all protocols to be consistent
 /* ============= AMBA 3 ABH-Lite Protocol ============= */
 
 /* AHB-Lite 3 Protocol Macros */
@@ -36,7 +37,7 @@
 #define AHB3L_HWRITE_WRITE      0x1U
 
 /* HPROT: Protection Control Bits */
-#define AHB3L_HPROT_MASK        0xfU
+#define AHB3L_HPROT_MASK        0xFU
 #define AHB3L_HPROT_DATA        0x1U /* Bit 0: 1=Data, 0=Opcode */
 #define AHB3L_HPROT_PRIV        0x2U /* Bit 1: 1=Privileged, 0=User */
 #define AHB3L_HPROT_DEFAULT     (AHB3L_HPROT_DATA | AHB3L_HPROT_PRIV)
@@ -47,7 +48,7 @@
 #define SLAVE_TRANS_BYTES   sizeof(ahb3lite_strans_s)
 
 /* AHB3Lite Master Transaction */
-typedef struct ahb3lite_mtrans_s {
+typedef struct {
     bool ahb3lite_hwrite;
     bool ahb3lite_hready;
     bool ahb3lite_hmastlock;
@@ -64,7 +65,7 @@ typedef struct ahb3lite_mtrans_s {
 } ahb3lite_mtrans_s;
 
 /* AHB3Lite Slave Transaction */
-typedef struct ahb3lite_strans_s {
+typedef struct {
     bool ahb3lite_hreadyout;
     bool ahb3lite_hresp;
 
@@ -137,13 +138,13 @@ inline void sbytes2trans(ahb3lite_strans_s *trans, const uint8_t *trans_buf)
 /** @} */
 
 /* LTI Flow: For now only LTI_ATST and LTI_NO_STALL are supported */
-typedef enum lti_laflow_t {
+typedef enum {
     LTI_FLOW_ATST = 1,
     LTI_FLOW_NO_STALL = 2
 } lti_laflow_t;
 
 /* LTI Resp: Response can be one of Succes, MRIF Success or FAULT_ABORT */
-typedef enum lti_lrresp_t {
+typedef enum {
     LTI_RESP_SUCCESS = 0,
     LTI_RESP_MRIF_SUCCESS = 3,
     LTI_RESP_FAULT_ABORT = 4
@@ -152,7 +153,7 @@ typedef enum lti_lrresp_t {
 /* Response Channel */
 
 /* AHB3Lite Master Transaction */
-typedef struct LTI_LA_s{
+typedef struct {
     uint64_t iova;
     uint32_t dev_id;
     uint32_t proc_id;
@@ -162,9 +163,57 @@ typedef struct LTI_LA_s{
 } LTI_LA_s;
 
 /* AHB3Lite Slave Transaction */
-typedef struct LTI_LR_s{
+typedef struct {
     lti_lrresp_t resp;
     uint64_t ppn;
     /* MRIF fields */
     uint64_t mrif_fields;
 } LTI_LR_s;
+
+/* ============= AMBA AXI4 Protocol ============= */
+/* Maximum size of PTE fetched from memory (in bytes) */
+#define DDT_NON_LEAF_PTE_BYTES  8
+#define DDT_BASE_DC_PTE_BYTES   32
+#define DDT_EXTD_DC_PTE_BYTES   64
+
+#define PDT_NON_LEAF_PTE_BYTES  8
+#define PDT_PC_PTE_BYTES        16
+
+#define MAX_PTE_BYTES  DDT_EXTD_DC_PTE_BYTES
+
+/* AXI4 Response Status */
+typedef enum {
+    OKAY,
+    EXOKAY,
+    SLVERR,
+    DECERR
+} axi4_access_t;
+
+/* AXI4 Response */
+typedef union {
+    struct {
+        uint8_t InD : 1;
+        uint8_t NS  : 1; // always 1
+        uint8_t PnU : 1;
+    };
+    uint8_t raw : 3;
+} prot_u;
+
+/* AXI4 Request */
+typedef struct {
+    uint64_t addr;
+
+    /* InD | 1 | PnU */
+    prot_u access_prot;
+    bool is_write;
+
+    size_t bytes;
+    void *write_data;
+} axi4_reqt_t;
+
+typedef struct {
+    axi4_access_t resp;
+
+    size_t bytes;
+    void *pte;
+} axi4_resp_t;
