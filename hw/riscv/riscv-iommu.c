@@ -34,10 +34,11 @@
 #include "riscv-iommu.h"
 #include "riscv-iommu-bits.h"
 #include "riscv-iommu-hpm.h"
+#include "riscv_qemu_rtl_intf.h"
 #include "system/memory.h"
 #include "trace.h"
 
-#include "riscv_iommu_intf.h"
+#include "riscv_qemu_rtl_intf.h"
 
 #define LIMIT_CACHE_CTX               (1U << 7)
 #define LIMIT_CACHE_IOT               (1U << 20)
@@ -78,184 +79,6 @@ struct RISCVIOMMUEntry {
 /* IOMMU index for transactions without process_id specified. */
 #define RISCV_IOMMU_NOPROCID 0
 
-/* AHB */
-static void ahb3lite_event_handler(void *opaque, QEMUChrEvent event)
-{
-    /* QEMU is master in AHB protocl, hence it sends the reqt (requestor) id
-     * to QRB on AHB_SOCK
-     *
-     * ID is sent when the QEMU serial port is opened, and it is the first item
-     * server expects to read when a client connects
-     */
-    RISCVIOMMUState *s = opaque;
-    switch (event) {
-        case CHR_EVENT_OPENED:
-            qemu_chr_fe_write_all(&s->ahb3lite_fe, (uint8_t *) "reqt", 4);
-            break;
-        default:
-            break;
-    }
-}
-
-static MemTxResult qemu2rtl_read_ahb3lite(RISCVIOMMUState *s,
-                                          ahb3lite_strans_s *strans,
-                                          uint8_t *strans_buf)
-{
-    int chardev_status = qemu_chr_fe_read_all(&s->ahb3lite_fe, strans_buf,
-                                              SLAVE_TRANS_BYTES);
-    if (chardev_status == -1) {
-        /* Unable to read from socket */
-        return MEMTX_ERROR;
-    }
-
-    sbytes2trans(strans, strans_buf);
-    trace_qemu2rtl_ahb3lite_slave(strans->ahb3lite_hrdata,
-                                  strans->ahb3lite_hresp,
-                                  strans->ahb3lite_hreadyout);
-
-    /* If we receive hresp of 1, we throw memory error */
-    if (strans->ahb3lite_hresp == AHB3L_HRESP_ERROR) {
-        return MEMTX_ERROR;
-    }
-
-    return MEMTX_OK;
-}
-
-static MemTxResult qemu2rtl_ahb3lite(RISCVIOMMUState *s, uint32_t addr,
-                                     uint64_t wdata, bool is_double_access,
-                                     bool is_write, uint64_t *rdata)
-{
-    int chardev_status;
-    ahb3lite_mtrans_s mtrans;
-    ahb3lite_strans_s strans;
-    uint8_t mtrans_buf[MASTER_TRANS_BYTES];
-    uint8_t strans_buf[SLAVE_TRANS_BYTES];
-
-    if (!qemu_chr_fe_backend_open(&s->ahb3lite_fe)) {
-        /* Charbackend is not open */
-        return MEMTX_ERROR;
-    }
-
-    mtrans.ahb3lite_hwrite = is_write;
-    mtrans.ahb3lite_hready = true;
-    mtrans.ahb3lite_hmastlock = false;
-    mtrans.ahb3lite_hsize = is_double_access ? AHB3L_HSIZE_64BIT :
-                                               AHB3L_HSIZE_32BIT;
-    mtrans.ahb3lite_hburst = AHB3L_HBURST_SINGLE; /* SINGLE */
-    mtrans.ahb3lite_htrans = AHB3L_HTRANS_NONSEQ; /* 2 => NONSEQ, 3 => SEQ */
-    mtrans.ahb3lite_hprot = AHB3L_HPROT_DEFAULT; /* Privileged + Data access */
-    mtrans.ahb3lite_haddr = addr;
-    mtrans.ahb3lite_hwdata = wdata;
-
-    mtrans2bytes(&mtrans, mtrans_buf);
-    chardev_status = qemu_chr_fe_write_all(&s->ahb3lite_fe, mtrans_buf,
-                                           MASTER_TRANS_BYTES);
-    trace_qemu2rtl_ahb3lite_master(mtrans.ahb3lite_hwdata,
-                                   mtrans.ahb3lite_haddr,
-                                   mtrans.ahb3lite_hsize,
-                                   mtrans.ahb3lite_hburst,
-                                   mtrans.ahb3lite_hprot,
-                                   mtrans.ahb3lite_htrans,
-                                   mtrans.ahb3lite_hwrite,
-                                   mtrans.ahb3lite_hmastlock,
-                                   mtrans.ahb3lite_hready);
-    if (chardev_status == -1) {
-        /* Unable to write to socket */
-        return MEMTX_ERROR;
-    }
-
-    if (qemu2rtl_read_ahb3lite(s, &strans, strans_buf) != MEMTX_OK) {
-        return MEMTX_ERROR;
-    }
-
-    /* We wait and keep reading until the readyout is 1 */
-    while (strans.ahb3lite_hreadyout == AHB3L_HREADY_WAIT) {
-        if (qemu2rtl_read_ahb3lite(s, &strans, strans_buf) != MEMTX_OK) {
-            return MEMTX_ERROR;
-        }
-    }
-
-    if (rdata) {
-        *rdata = strans.ahb3lite_hrdata;
-    }
-
-    return MEMTX_OK;
-}
-
-/* LTI */
-static void lti_event_handler(void *opaque, QEMUChrEvent event)
-{
-    /* QEMU is master in LTI protocl, hence it sends the reqt (requestor) id
-     * to QRB on LTI_SOCK
-     *
-     * ID is sent when the QEMU serial port is opened, and it is the first item
-     * server expects to read when a client connects
-     */
-    RISCVIOMMUState *s = opaque;
-    switch (event) {
-        case CHR_EVENT_OPENED:
-            qemu_chr_fe_write_all(&s->lti_fe, (uint8_t *) "reqt", 4);
-            break;
-        default:
-            break;
-    }
-}
-
-static void rtl_lti_translate(IOMMUTLBEntry *iotlb, uint32_t dev_id,
-                              uint32_t proc_id, CharFrontend *lti_fe)
-{
-    LTI_LA_s req;
-    LTI_LR_s resp;
-    int chardev_status;
-    const char *resp_status;
-
-    req.iova = iotlb->iova;
-    req.dev_id = dev_id;
-    req.proc_id = proc_id;
-    req.flow_type = LTI_FLOW_NO_STALL;
-    /* For now keeping translations as unprivileged access */
-    req.is_priv = false;// (iotlb->flag & 0x8) >> 3;
-    req.is_write = (iotlb->perm == IOMMU_WO);
-
-    /* TODO: Add appropriate error handling
-     * TODO: Update hard coded string when ATST flow supported */
-    trace_qemu2rtl_lti_req(req.iova, req.dev_id, req.proc_id, "NO_STALL",
-                           req.is_priv, req.is_write);
-
-    chardev_status = qemu_chr_fe_write_all(lti_fe, (uint8_t *)&req, sizeof(req));
-    if (chardev_status == -1) {
-        return;
-    }
-
-    chardev_status = qemu_chr_fe_read_all(lti_fe, (uint8_t*)&resp, sizeof(resp));
-    if (chardev_status == -1) {
-        return;
-    }
-    switch (resp.resp) {
-        case LTI_RESP_SUCCESS:
-            resp_status = "SUCCESS";
-            break;
-        case LTI_RESP_MRIF_SUCCESS:
-            resp_status = "MRIF_SUCCESS";
-            break;
-        case LTI_RESP_FAULT_ABORT:
-            resp_status = "FAULT_ABORT";
-            break;
-        default:
-            resp_status = "INVALID_RESP";
-    }
-    trace_qemu2rtl_lti_resp(resp_status, resp.ppn, resp.mrif_fields,
-                            (resp.mrif_fields >> LTI_LRUSER_NPPN_OFFSET) & LTI_LRUSER_NPPN_MASK,
-                            resp.mrif_fields & LTI_LRUSER_NID_MASK);
-
-    /* Translation successful, updating iotlb data structure with translated address */
-    iotlb->translated_addr = resp.ppn;
-    /* The address mask depends on which level the PTE was found i.e. superpage or 4KB page
-     * defaulting the mask to 4KB page*/
-    iotlb->addr_mask = ~TARGET_PAGE_MASK;
-}
-
-/* AXI */
 /* QEMU IOMMU */
 static uint8_t riscv_iommu_get_icvec_vector(uint32_t icvec, uint32_t vec_type)
 {
@@ -2509,9 +2332,8 @@ static MemTxResult riscv_iommu_mmio_write(void *opaque, hwaddr addr,
         process_fn(s);
     }
 
-    return qemu2rtl_ahb3lite(s, addr, data,
-                             DOUBLE_ACCESS(size),
-                             AHB3L_HWRITE_WRITE, NULL);
+    return rtl_mmio_rmw(addr, AHB3L_HWRITE_WRITE, DOUBLE_ACCESS(size),
+                        data, NULL, &s->ahb3lite_fe);
 }
 
 static MemTxResult riscv_iommu_mmio_read(void *opaque, hwaddr addr,
@@ -2556,9 +2378,8 @@ static MemTxResult riscv_iommu_mmio_read(void *opaque, hwaddr addr,
 
     *data = val;
 
-    return qemu2rtl_ahb3lite(s, addr, 0,
-                             DOUBLE_ACCESS(size),
-                             AHB3L_HWRITE_READ, data);
+    return rtl_mmio_rmw(addr, AHB3L_HWRITE_READ, DOUBLE_ACCESS(size),
+                        0, data, &s->ahb3lite_fe);
 }
 
 static const MemoryRegionOps riscv_iommu_mmio_ops = {
@@ -2931,7 +2752,16 @@ static IOMMUTLBEntry riscv_iommu_memory_region_translate(
     //                       iotlb.translated_addr);
 
     // riscv_iommu_ctx_put(as->iommu, ref);
-    rtl_lti_translate(&iotlb, as->devid, iommu_idx, &as->iommu->lti_fe);
+
+    /* For now keeping translations as unprivileged access */
+    iotlb.translated_addr = rtl_lti_translate(addr, (flag == IOMMU_WO),
+                                              false, // (flag & 0x8) >> 3,
+                                              as->devid, iommu_idx,
+                                              &as->iommu->lti_fe);
+
+    /* The address mask depends on which level the PTE was found i.e. superpage or 4KB page
+     * defaulting the mask to 4KB page*/
+    iotlb.addr_mask = ~TARGET_PAGE_MASK;
 
     return iotlb;
 }

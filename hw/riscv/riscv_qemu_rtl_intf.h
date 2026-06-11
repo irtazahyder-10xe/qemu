@@ -4,6 +4,11 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "chardev/char-fe.h"
+#include "exec/memattrs.h"
+#include "exec/hwaddr.h"
+
+// TODO: Make generic fe_event handler
 // TODO: Update naming scheme for all protocols to be consistent
 /* ============= AMBA 3 ABH-Lite Protocol ============= */
 
@@ -72,49 +77,39 @@ typedef struct {
     uint64_t ahb3lite_hrdata;
 } ahb3lite_strans_s;
 
-/* Convert AHB3Lite Master struct to a series of bytes */
-inline void mtrans2bytes(const ahb3lite_mtrans_s *trans, uint8_t *trans_buf)
-{
-    if (!trans || !trans_buf) {
-        trans_buf = NULL;
-        return;
-    }
+/** @brief Event handler for AHB socket device events
+ *
+ * This function is the callback for qemu_chr_fe_set_handlers for AHB frontend.
+ * QEMU is master in AHB protocl, hence it sends the reqt (requestor) id to QRB
+ * on AHB_SOCK.
+ *
+ * @param opaque Pointer to be casted to RISCV_IOMMU. Used to fetch frontend
+ * @param event  Event due to which callback triggered
+ */
+void ahb3lite_event_handler(void *opaque, QEMUChrEvent event);
 
-    memcpy(trans_buf, trans, MASTER_TRANS_BYTES);
-}
-
-/* Convert AHB3Lite Slave struct to a series of bytes */
-inline void strans2bytes(const ahb3lite_strans_s *trans, uint8_t *trans_buf)
-{
-    if (!trans || !trans_buf) {
-        trans_buf = NULL;
-        return;
-    }
-
-    memcpy(trans_buf, trans, SLAVE_TRANS_BYTES);
-}
-
-/* Convert series of bytes to AHB3Lite Master struct */
-inline void mbytes2trans(ahb3lite_mtrans_s *trans, const uint8_t *trans_buf)
-{
-    if (!trans || !trans_buf) {
-        trans = NULL;
-        return;
-    }
-
-    memcpy(trans, trans_buf, MASTER_TRANS_BYTES);
-}
-
-/* Convert series of bytes to AHB3Lite Slave struct */
-inline void sbytes2trans(ahb3lite_strans_s *trans, const uint8_t *trans_buf)
-{
-    if (!trans || !trans_buf) {
-        trans = NULL;
-        return;
-    }
-
-    memcpy(trans, trans_buf, SLAVE_TRANS_BYTES);
-}
+/** @brief QEMU -> RTL MMR read, modify, write bypass.
+ *
+ * Forwards any IOMMU MMR RMW request to serial port ahb_fe. The backend
+ * is preferrably a unix socket forwarding AHB request to RTL.
+ *
+ * This function is to be called in riscv-iommu.c MemoryOps read and write
+ * callbacks.
+ *
+ * @param addr      IOMMU MMR offset
+ * @param is_write  Operation to be performed on MMR (Write or Read)
+ * @param is_double 8 byte of 4 byte access
+ * @param wdata     Write data send to RTL MMR
+ * @param rdata     If @is_write == false, contains data read from MMR
+ * @param ahb_fe    Pointer to objects (type RISCV_IOMMU) frontend attribute
+ *
+ * NOTE: User is responsible for initializing varibale to hold rdata.
+ *       For write operations @rdata is NULL.
+ };
+ */
+MemTxResult rtl_mmio_rmw(hwaddr addr, bool is_write, bool is_double,
+                         uint64_t wdata, uint64_t *rdata,
+                         CharFrontend *ahb_fe);
 
 /* ============= AMBA LTI A Protocol ============= */
 /** @name Request Channel Signals
@@ -150,9 +145,7 @@ typedef enum {
     LTI_RESP_FAULT_ABORT = 4
 } lti_lrresp_t;
 
-/* Response Channel */
-
-/* AHB3Lite Master Transaction */
+/* LTI Request Channel Transaction */
 typedef struct {
     uint64_t iova;
     uint32_t dev_id;
@@ -162,13 +155,49 @@ typedef struct {
     bool is_write;
 } LTI_LA_s;
 
-/* AHB3Lite Slave Transaction */
+/* LTI Response Channel Transaction */
 typedef struct {
     lti_lrresp_t resp;
     uint64_t ppn;
     /* MRIF fields */
     uint64_t mrif_fields;
 } LTI_LR_s;
+
+/** @brief Event handler for LTI socket device events
+ *
+ * This function is the callback for qemu_chr_fe_set_handlers for LTI frontend.
+ * QEMU is master in LTI protocl, hence it sends the reqt (requestor) id to QRB
+ * on AHB_SOCK.
+ *
+ * @param opaque Pointer to be casted to RISCV_IOMMU. Used to fetch frontend
+ * @param event  Event due to which callback triggered
+ *
+ * TODO: For now it is assumed the frontend is present in RISCV IOMMU. This
+ *       is subjected to change and the frontend would be initialized in
+ *       IO DEVICE.
+ */
+void lti_event_handler(void *opaque, QEMUChrEvent event);
+
+/** @brief QEMU -> RTL IOVA translation request
+ *
+ * Forwards any IOMMU translation requests to serial port lti_fe. The backend
+ * is preferrably a unix socket forwarding LTI request to RTL.
+ *
+ * @param iova      IO Virtual Address to be translated
+ * @param is_write  Memory read or write operation on address @iova
+ * @param is_priv   Priviledged or Unpriviledged access.
+ * @param dev_id    Device ID
+ * @param proc_id   Process ID
+ * @param lti_fe    Pointer to objects (type RISCV_IOMMU) frontend attribute
+ *
+ * TODO: For now it is assumed the frontend is present in RISCV IOMMU. This
+ *       is subjected to change and the frontend would be initialized in
+ *       IO DEVICE.
+ };
+ */
+hwaddr rtl_lti_translate(hwaddr iova, bool is_write, bool is_priv,
+                         uint32_t dev_id, uint32_t proc_id,
+                         CharFrontend *lti_fe);
 
 /* ============= AMBA AXI4 Protocol ============= */
 /* Maximum size of PTE fetched from memory (in bytes) */

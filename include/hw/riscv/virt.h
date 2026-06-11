@@ -19,6 +19,8 @@
 #ifndef HW_RISCV_VIRT_H
 #define HW_RISCV_VIRT_H
 
+#include <pthread.h>
+
 #include "hw/core/boards.h"
 #include "hw/riscv/riscv_hart.h"
 #include "hw/core/sysbus.h"
@@ -64,6 +66,9 @@ struct RISCVVirtState {
     struct GPEXHost *gpex_host;
     OnOffAuto iommu_sys;
     uint16_t pci_iommu_bdf;
+
+    /* Thread to manage RTL memory accesses */
+    pthread_t mem_thread;
 };
 
 enum {
