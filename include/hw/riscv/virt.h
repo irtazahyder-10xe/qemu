@@ -26,6 +26,7 @@
 #include "hw/core/sysbus.h"
 #include "hw/block/flash.h"
 #include "hw/intc/riscv_imsic.h"
+#include "hw/riscv/riscv_qemu_rtl_intf.h"
 
 #define VIRT_CPUS_MAX_BITS             9
 #define VIRT_CPUS_MAX                  (1 << VIRT_CPUS_MAX_BITS)
@@ -68,7 +69,8 @@ struct RISCVVirtState {
     uint16_t pci_iommu_bdf;
 
     /* Thread to manage RTL memory accesses */
-    pthread_t mem_thread;
+    pthread_t axi4_thread;
+    axi4_th_args_s axi4_th_args;
 };
 
 enum {

@@ -3,10 +3,12 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
+#include <pthread.h>
 
 #include "chardev/char-fe.h"
 #include "exec/memattrs.h"
 #include "exec/hwaddr.h"
+#include "system/memory.h"
 
 // TODO: Make generic fe_event handler
 // TODO: Update naming scheme for all protocols to be consistent
@@ -77,7 +79,8 @@ typedef struct {
     uint64_t ahb3lite_hrdata;
 } ahb3lite_strans_s;
 
-/** @brief Event handler for AHB socket device events
+/**
+ * @brief Event handler for AHB socket device events
  *
  * This function is the callback for qemu_chr_fe_set_handlers for AHB frontend.
  * QEMU is master in AHB protocl, hence it sends the reqt (requestor) id to QRB
@@ -88,7 +91,8 @@ typedef struct {
  */
 void ahb3lite_event_handler(void *opaque, QEMUChrEvent event);
 
-/** @brief QEMU -> RTL MMR read, modify, write bypass.
+/**
+ * @brief QEMU -> RTL MMR read, modify, write bypass.
  *
  * Forwards any IOMMU MMR RMW request to serial port ahb_fe. The backend
  * is preferrably a unix socket forwarding AHB request to RTL.
@@ -112,7 +116,8 @@ MemTxResult rtl_mmio_rmw(hwaddr addr, bool is_write, bool is_double,
                          CharFrontend *ahb_fe);
 
 /* ============= AMBA LTI A Protocol ============= */
-/** @name Request Channel Signals
+/**
+ * @name Request Channel Signals
  *
  * LTI_LRUSER: {NPPN[43:0],NID[10:0]}
  * @{
@@ -121,7 +126,8 @@ MemTxResult rtl_mmio_rmw(hwaddr addr, bool is_write, bool is_double,
 #define LTI_LASSID_PROCID_MASK  0xFFFFFUL
 /** @} */
 
-/** @name Response Channel Signals
+/**
+ * @name Response Channel Signals
  *
  * LTI_LRUSER: {NPPN[43:0],NID[10:0]}
  * @{
@@ -163,7 +169,8 @@ typedef struct {
     uint64_t mrif_fields;
 } LTI_LR_s;
 
-/** @brief Event handler for LTI socket device events
+/**
+ * @brief Event handler for LTI socket device events
  *
  * This function is the callback for qemu_chr_fe_set_handlers for LTI frontend.
  * QEMU is master in LTI protocl, hence it sends the reqt (requestor) id to QRB
@@ -178,7 +185,8 @@ typedef struct {
  */
 void lti_event_handler(void *opaque, QEMUChrEvent event);
 
-/** @brief QEMU -> RTL IOVA translation request
+/**
+ * @brief QEMU -> RTL IOVA translation request
  *
  * Forwards any IOMMU translation requests to serial port lti_fe. The backend
  * is preferrably a unix socket forwarding LTI request to RTL.
@@ -212,13 +220,13 @@ hwaddr rtl_lti_translate(hwaddr iova, bool is_write, bool is_priv,
 
 /* AXI4 Response Status */
 typedef enum {
-    OKAY,
-    EXOKAY,
-    SLVERR,
-    DECERR
+    AXI4_OKAY,
+    AXI4_EXOKAY,
+    AXI4_SLVERR,
+    AXI4_DECERR
 } axi4_access_t;
 
-/* AXI4 Response */
+/* Permissions */
 typedef union {
     struct {
         uint8_t InD : 1;
@@ -237,12 +245,27 @@ typedef struct {
     bool is_write;
 
     size_t bytes;
-    void *write_data;
+    uint8_t write_data[MAX_PTE_BYTES];
 } axi4_reqt_t;
 
+/* AXI4 Response */
 typedef struct {
     axi4_access_t resp;
 
     size_t bytes;
-    void *pte;
+    uint8_t pte[MAX_PTE_BYTES];
 } axi4_resp_t;
+
+/**
+ * @brief Thread handling incoming AXI4 transactions from RTL
+ *
+ * @param args->axi4_fe Chardev Frontend to read and write data from
+ * @param args->as      Address Space of Virt Machine
+ *
+ */
+typedef struct {
+    Chardev *axi4_chardev;
+    AddressSpace *as;
+} axi4_th_args_s;
+
+void *rtl_dram_access(void *args);

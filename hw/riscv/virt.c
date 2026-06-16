@@ -59,6 +59,9 @@
 #include "hw/virtio/virtio-iommu.h"
 #include "hw/uefi/var-service-api.h"
 
+#include "riscv_qemu_rtl_intf.h"
+#include <signal.h>
+
 /* KVM AIA only supports APLIC MSI. APLIC Wired is always emulated by QEMU. */
 static bool virt_use_kvm_aia_aplic_imsic(RISCVVirtAIAType aia_type)
 {
@@ -1738,7 +1741,7 @@ static void virt_machine_init(MachineState *machine)
                                  riscv_is_32bit(&s->soc[0]) ? 34 : 56,
                                  &error_fatal);
         /* AHB3Lite chardev */
-        /* TODO: Find using propertie name instead of expecting the order */
+        /* TODO: Find using properties name instead of expecting the order */
         object_property_set_link(OBJECT(iommu_sys), "ahb3lite",
                                  OBJECT(serial_hd(1)),
                                  &error_fatal);
@@ -1746,8 +1749,18 @@ static void virt_machine_init(MachineState *machine)
         object_property_set_link(OBJECT(iommu_sys), "lti",
                                  OBJECT(serial_hd(2)),
                                  &error_fatal);
+        // object_property_set_link(OBJECT(iommu_sys), "axi4",
+        //                          OBJECT(serial_hd(3)),
+        //                          &error_fatal);
+
         sysbus_realize_and_unref(SYS_BUS_DEVICE(iommu_sys), &error_fatal);
     }
+
+    /* Initializing thread to deal with RTL memory accesses */
+    /* AXI4 chardev */
+    s->axi4_th_args.axi4_chardev = serial_hd(3);
+    s->axi4_th_args.as = &address_space_memory;
+    pthread_create(&s->axi4_thread, NULL, rtl_dram_access, (void *)&s->axi4_th_args);
 
     s->machine_done.notify = virt_machine_done;
     qemu_add_machine_init_done_notifier(&s->machine_done);
@@ -1987,12 +2000,19 @@ static void virt_machine_class_init(ObjectClass *oc, const void *data)
                                           "Enable IOMMU platform device");
 }
 
+static void virt_machine_instance_finalize(Object *obj)
+{
+    RISCVVirtState *s = RISCV_VIRT_MACHINE(obj);
+    pthread_kill(s->axi4_thread, 9);
+}
+
 static const TypeInfo virt_machine_typeinfo = {
     .name       = MACHINE_TYPE_NAME("virt"),
     .parent     = TYPE_MACHINE,
     .class_init = virt_machine_class_init,
     .instance_init = virt_machine_instance_init,
     .instance_size = sizeof(RISCVVirtState),
+    .instance_finalize = virt_machine_instance_finalize,
     .interfaces = (const InterfaceInfo[]) {
          { TYPE_HOTPLUG_HANDLER },
          { }
