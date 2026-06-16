@@ -1,8 +1,8 @@
 #include "qemu/osdep.h"
 #include "exec/memattrs.h"
 #include "chardev/char.h"
-#include "trace.h"
 #include "riscv-iommu.h"
+#include "trace.h"
 
 #include "riscv_qemu_rtl_intf.h"
 
@@ -114,7 +114,7 @@ hwaddr rtl_lti_translate(hwaddr iova, bool is_write, bool is_priv,
 
     /* TODO: Add appropriate error handling
      * TODO: Update hard coded string when ATST flow supported */
-    trace_qrb_lti_req(req.iova, req.dev_id, req.proc_id, "NO_STALL",
+    trace_qrb_lti_reqt(req.iova, req.dev_id, req.proc_id, "NO_STALL",
                            req.is_priv, req.is_write);
 
     /* Sending LTI request to QRB */
@@ -186,6 +186,9 @@ void *rtl_dram_access(void *args)
             break;
         }
 
+        trace_qrb_axi4_reqt(reqt.addr,
+                            (reqt.is_write ? "WRITE" : "READ"),
+                            reqt.bytes);
         /* Performing required dma_memory_* function based on type of request */
         if (reqt.is_write) {
             mem_status = dma_memory_write(_args->as, reqt.addr,
@@ -211,5 +214,6 @@ void *rtl_dram_access(void *args)
         if (bytes >= 0) {
             break;
         }
+        trace_qrb_axi4_resp(mem_status == MEMTX_OK ? "OKAY" : "SLVERR");
     }
 }
