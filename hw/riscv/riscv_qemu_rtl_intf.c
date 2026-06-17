@@ -182,7 +182,7 @@ void *rtl_dram_access(void *args)
         bytes = qemu_chr_fe_read_all(&axi4_fe, (uint8_t *)&reqt, sizeof(reqt));
 
         /* Unable to read socket, exit thread */
-        if (bytes >= 0) {
+        if (bytes <= 0) {
             break;
         }
 
@@ -211,7 +211,7 @@ void *rtl_dram_access(void *args)
         /* Writing memory response to QRB */
         bytes = qemu_chr_fe_write_all(&axi4_fe, (uint8_t *)&resp, sizeof(resp));
         /* Unable to write to socket, exit thread */
-        if (bytes >= 0) {
+        if (bytes <= 0) {
             break;
         }
         trace_qrb_axi4_resp(mem_status == MEMTX_OK ? "OKAY" : "SLVERR");
