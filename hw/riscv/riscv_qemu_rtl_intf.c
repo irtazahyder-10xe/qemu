@@ -216,4 +216,5 @@ void *rtl_dram_access(void *args)
         }
         trace_qrb_axi4_resp(mem_status == MEMTX_OK ? "OKAY" : "SLVERR");
     }
+    return NULL;
 }
