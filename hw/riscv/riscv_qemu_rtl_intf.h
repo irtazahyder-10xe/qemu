@@ -15,69 +15,30 @@
 /* ============= AMBA 3 ABH-Lite Protocol ============= */
 
 /* AHB-Lite 3 Protocol Macros */
-/* HTRANS: Transfer Type */
-#define AHB3L_HTRANS_MASK       0x3U
-#define AHB3L_HTRANS_IDLE       0x0U
-#define AHB3L_HTRANS_BUSY       0x1U
-#define AHB3L_HTRANS_NONSEQ     0x2U
-#define AHB3L_HTRANS_SEQ        0x3U
-
-/* HBURST: Burst Type */
-#define AHB3L_HBURST_MASK       0x7U
-#define AHB3L_HBURST_SINGLE     0x0U
-
-/* HSIZE: Transfer Size */
-#define AHB3L_HSIZE_MASK        0x7U
-#define AHB3L_HSIZE_32BIT       0x2U
-#define AHB3L_HSIZE_64BIT       0x3U
-
+/* HWRITE: Transfer Direction */
+#define AHB3L_HWRITE_READ       0x0U
+#define AHB3L_HWRITE_WRITE      0x1U
 /* HRESP: Response Type */
 #define AHB3L_HRESP_OKAY        0x0U
 #define AHB3L_HRESP_ERROR       0x1U
 
-/* HREADY: Transfer Status */
-#define AHB3L_HREADY_WAIT       0x0U
-#define AHB3L_HREADY_DONE       0x1U
-
-/* HWRITE: Transfer Direction */
-#define AHB3L_HWRITE_READ       0x0U
-#define AHB3L_HWRITE_WRITE      0x1U
-
-/* HPROT: Protection Control Bits */
-#define AHB3L_HPROT_MASK        0xFU
-#define AHB3L_HPROT_DATA        0x1U /* Bit 0: 1=Data, 0=Opcode */
-#define AHB3L_HPROT_PRIV        0x2U /* Bit 1: 1=Privileged, 0=User */
-#define AHB3L_HPROT_DEFAULT     (AHB3L_HPROT_DATA | AHB3L_HPROT_PRIV)
-
 #define DOUBLE_ACCESS(size) (size == 8)
-
-#define MASTER_TRANS_BYTES  sizeof(ahb3lite_mtrans_s)
-#define SLAVE_TRANS_BYTES   sizeof(ahb3lite_strans_s)
 
 /* AHB3Lite Master Transaction */
 typedef struct {
-    bool ahb3lite_hwrite;
-    bool ahb3lite_hready;
-    bool ahb3lite_hmastlock;
-    bool ahb3lite_hsel;
+    bool hwrite;
+    uint8_t hsize; /* Only 4 or 8 byte access allowed */
 
-    /* We are using 32 bits to ensure alignment with SV svBitVecVal */
-    uint32_t ahb3lite_hsize;
-    uint32_t ahb3lite_hburst;
-    uint32_t ahb3lite_htrans;
-    uint32_t ahb3lite_hprot;
-
-    uint32_t ahb3lite_haddr;
-    uint64_t ahb3lite_hwdata;
-} ahb3lite_mtrans_s;
+    uint32_t haddr;
+    uint64_t hwdata;
+} ahb3lite_master_s;
 
 /* AHB3Lite Slave Transaction */
 typedef struct {
-    bool ahb3lite_hreadyout;
-    bool ahb3lite_hresp;
+    bool hresp;
 
-    uint64_t ahb3lite_hrdata;
-} ahb3lite_strans_s;
+    uint64_t hrdata;
+} ahb3lite_slave_s;
 
 /**
  * @brief Event handler for AHB socket device events
@@ -102,7 +63,7 @@ void ahb3lite_event_handler(void *opaque, QEMUChrEvent event);
  *
  * @param addr      IOMMU MMR offset
  * @param is_write  Operation to be performed on MMR (Write or Read)
- * @param is_double 8 byte of 4 byte access
+ * @param is_8bytes 8 byte of 4 byte access
  * @param wdata     Write data send to RTL MMR
  * @param rdata     If @is_write == false, contains data read from MMR
  * @param ahb_fe    Pointer to objects (type RISCV_IOMMU) frontend attribute
@@ -111,7 +72,7 @@ void ahb3lite_event_handler(void *opaque, QEMUChrEvent event);
  *       For write operations @rdata is NULL.
  };
  */
-MemTxResult rtl_mmio_rmw(hwaddr addr, bool is_write, bool is_double,
+MemTxResult rtl_mmio_rmw(hwaddr addr, bool is_write, bool is_8bytes,
                          uint64_t wdata, uint64_t *rdata,
                          CharFrontend *ahb_fe);
 
@@ -157,9 +118,11 @@ typedef struct {
     uint32_t dev_id;
     uint32_t proc_id;
     lti_laflow_t flow_type;
+
+    bool is_proc_valid;
     bool is_priv;
     bool is_write;
-} LTI_LA_s;
+} lti_LA_s;
 
 /* LTI Response Channel Transaction */
 typedef struct {
@@ -167,7 +130,7 @@ typedef struct {
     uint64_t ppn;
     /* MRIF fields */
     uint64_t mrif_fields;
-} LTI_LR_s;
+} lti_LR_s;
 
 /**
  * @brief Event handler for LTI socket device events
@@ -191,12 +154,13 @@ void lti_event_handler(void *opaque, QEMUChrEvent event);
  * Forwards any IOMMU translation requests to serial port lti_fe. The backend
  * is preferrably a unix socket forwarding LTI request to RTL.
  *
- * @param iova      IO Virtual Address to be translated
- * @param is_write  Memory read or write operation on address @iova
- * @param is_priv   Priviledged or Unpriviledged access.
- * @param dev_id    Device ID
- * @param proc_id   Process ID
- * @param lti_fe    Pointer to objects (type RISCV_IOMMU) frontend attribute
+ * @param iova          IO Virtual Address to be translated
+ * @param is_write      Memory read or write operation on address @iova
+ * @param is_priv       Priviledged or Unpriviledged access.
+ * @param dev_id        Device ID
+ * @param proc_id_valid Validates if @proc_id is valid or garbage
+ * @param proc_id       Process ID
+ * @param lti_fe        Pointer to objects (type RISCV_IOMMU) frontend attribute
  *
  * TODO: For now it is assumed the frontend is present in RISCV IOMMU. This
  *       is subjected to change and the frontend would be initialized in
@@ -204,8 +168,8 @@ void lti_event_handler(void *opaque, QEMUChrEvent event);
  };
  */
 hwaddr rtl_lti_translate(hwaddr iova, bool is_write, bool is_priv,
-                         uint32_t dev_id, uint32_t proc_id,
-                         CharFrontend *lti_fe);
+                         uint32_t dev_id, bool proc_id_valid,
+                         uint32_t proc_id, CharFrontend *lti_fe);
 
 /* ============= AMBA AXI4 Protocol ============= */
 /* Maximum size of PTE fetched from memory (in bytes) */

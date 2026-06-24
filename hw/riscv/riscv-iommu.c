@@ -2756,7 +2756,7 @@ static IOMMUTLBEntry riscv_iommu_memory_region_translate(
     /* For now keeping translations as unprivileged access */
     iotlb.translated_addr = rtl_lti_translate(addr, (flag == IOMMU_WO),
                                               false, // (flag & 0x8) >> 3,
-                                              as->devid, iommu_idx,
+                                              as->devid, false, iommu_idx,
                                               &as->iommu->lti_fe);
 
     /* The address mask depends on which level the PTE was found i.e. superpage or 4KB page
