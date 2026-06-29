@@ -95,9 +95,7 @@ struct RISCVIOMMUState {
     uint8_t hpm_cntrs;
 
     /* RTL Protocol backends */
-    Chardev *ahb3lite;
     CharFrontend ahb3lite_fe;
-    Chardev *lti;
     CharFrontend lti_fe;
 };
 

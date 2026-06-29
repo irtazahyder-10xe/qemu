@@ -70,7 +70,6 @@ void ahb3lite_event_handler(void *opaque, QEMUChrEvent event);
  *
  * NOTE: User is responsible for initializing varibale to hold rdata.
  *       For write operations @rdata is NULL.
- };
  */
 MemTxResult rtl_mmio_rmw(hwaddr addr, bool is_write, bool is_8bytes,
                          uint64_t wdata, uint64_t *rdata,
@@ -165,7 +164,6 @@ void lti_event_handler(void *opaque, QEMUChrEvent event);
  * TODO: For now it is assumed the frontend is present in RISCV IOMMU. This
  *       is subjected to change and the frontend would be initialized in
  *       IO DEVICE.
- };
  */
 hwaddr rtl_lti_translate(hwaddr iova, bool is_write, bool is_priv,
                          uint32_t dev_id, bool proc_id_valid,

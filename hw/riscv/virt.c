@@ -1740,25 +1740,13 @@ static void virt_machine_init(MachineState *machine)
         object_property_set_uint(OBJECT(iommu_sys), "pas-bits",
                                  riscv_is_32bit(&s->soc[0]) ? 34 : 56,
                                  &error_fatal);
-        /* AHB3Lite chardev */
-        /* TODO: Find using properties name instead of expecting the order */
-        object_property_set_link(OBJECT(iommu_sys), "ahb3lite",
-                                 OBJECT(serial_hd(1)),
-                                 &error_fatal);
-        /* LTI-A chardev */
-        object_property_set_link(OBJECT(iommu_sys), "lti",
-                                 OBJECT(serial_hd(2)),
-                                 &error_fatal);
-        // object_property_set_link(OBJECT(iommu_sys), "axi4",
-        //                          OBJECT(serial_hd(3)),
-        //                          &error_fatal);
-
         sysbus_realize_and_unref(SYS_BUS_DEVICE(iommu_sys), &error_fatal);
     }
 
     /* Initializing thread to deal with RTL memory accesses */
     /* AXI4 chardev */
-    s->axi4_th_args.axi4_chardev = serial_hd(3);
+    /* TODO: Update this to fetch cmd line arguments via parsing for serial devices */
+    s->axi4_th_args.axi4_chardev = serial_hd(1);
     s->axi4_th_args.as = &address_space_memory;
     pthread_create(&s->axi4_thread, NULL, rtl_dram_access, (void *)&s->axi4_th_args);
 

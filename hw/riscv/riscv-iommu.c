@@ -22,6 +22,7 @@
 #include "hw/pci/pci_bus.h"
 #include "hw/pci/pci_device.h"
 #include "hw/core/qdev-properties.h"
+#include "hw/core/qdev-properties-system.h"
 #include "hw/riscv/riscv_hart.h"
 #include "migration/vmstate.h"
 #include "qapi/error.h"
@@ -2619,11 +2620,11 @@ static void riscv_iommu_realize(DeviceState *dev, Error **errp)
     }
 
     /* Initializing ahb3lite frontend */
-    qemu_chr_fe_init(&s->ahb3lite_fe, s->ahb3lite, errp);
+    // qemu_chr_fe_init(&s->ahb3lite_fe, s->ahb3lite, errp);
     qemu_chr_fe_set_handlers(&s->ahb3lite_fe, NULL, NULL, ahb3lite_event_handler,
                              NULL, s, NULL, true);
     /* Initializing lti frontend */
-    qemu_chr_fe_init(&s->lti_fe, s->lti, errp);
+    // qemu_chr_fe_init(&s->lti_fe, s->lti, errp);
     qemu_chr_fe_set_handlers(&s->lti_fe, NULL, NULL, lti_event_handler,
                              NULL, s, NULL, true);
 }
@@ -2687,10 +2688,8 @@ static const Property riscv_iommu_properties[] = {
     DEFINE_PROP_BOOL("g-stage", RISCVIOMMUState, enable_g_stage, TRUE),
     DEFINE_PROP_LINK("downstream-mr", RISCVIOMMUState, target_mr,
         TYPE_MEMORY_REGION, MemoryRegion *),
-    DEFINE_PROP_LINK("ahb3lite", RISCVIOMMUState, ahb3lite,
-                     TYPE_CHARDEV, Chardev *),
-    DEFINE_PROP_LINK("lti", RISCVIOMMUState, lti,
-                     TYPE_CHARDEV, Chardev *),
+    DEFINE_PROP_CHR("ahb3lite", RISCVIOMMUState, ahb3lite_fe),
+    DEFINE_PROP_CHR("lti", RISCVIOMMUState, lti_fe),
     DEFINE_PROP_UINT8("hpm-counters", RISCVIOMMUState, hpm_cntrs,
                       RISCV_IOMMU_IOCOUNT_NUM),
 };

@@ -62,7 +62,7 @@ static uint64_t msix_table_mmio_read(void *opaque, hwaddr addr,
 
     g_assert(addr + size <= RISCV_IOMMU_PCI_MSIX_VECTORS * PCI_MSIX_ENTRY_SIZE);
 
-    rtl_mmio_rmw(addr + RISCV_IOMMU_REG_MSI_CONFIG, AHB3L_HWRITE_WRITE,
+    rtl_mmio_rmw(addr + RISCV_IOMMU_REG_MSI_CONFIG, AHB3L_HWRITE_READ,
                  DOUBLE_ACCESS(size), 0, &data, &s->iommu.ahb3lite_fe);
     return data;
     // return pci_get_long(s->msix_table + addr);
@@ -74,7 +74,7 @@ static void msix_table_mmio_write(void *opaque, hwaddr addr,
     RISCVIOMMUStateSys *s = opaque;
 
     g_assert(addr + size <= RISCV_IOMMU_PCI_MSIX_VECTORS * PCI_MSIX_ENTRY_SIZE);
-    rtl_mmio_rmw(addr + RISCV_IOMMU_REG_MSI_CONFIG, AHB3L_HWRITE_READ,
+    rtl_mmio_rmw(addr + RISCV_IOMMU_REG_MSI_CONFIG, AHB3L_HWRITE_WRITE,
                  DOUBLE_ACCESS(size), val, NULL, &s->iommu.ahb3lite_fe);
     // pci_set_long(s->msix_table + addr, val);
 }
