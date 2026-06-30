@@ -182,16 +182,18 @@ void *rtl_dram_access(void *args)
                             (reqt.is_write ? "WRITE" : "READ"),
                             reqt.bytes);
         /* Performing required dma_memory_* function based on type of request */
+        /* NOTE: DMA writes does not work in the case of writing MSI, so using generic
+         * address space write instead */
         if (reqt.is_write) {
-            mem_status = dma_memory_write(_args->as, reqt.addr,
-                                          reqt.write_data, reqt.bytes,
-                                          MEMTXATTRS_UNSPECIFIED);
+            mem_status = address_space_write(_args->as, reqt.addr,
+                                             MEMTXATTRS_UNSPECIFIED,
+                                             reqt.write_data, reqt.bytes);
             /* Reponse PTE is all zeros if write operation */
             bzero(resp.pte, sizeof(resp.pte));
         } else {
-            mem_status = dma_memory_read(_args->as, reqt.addr,
-                                         resp.pte, reqt.bytes,
-                                         MEMTXATTRS_UNSPECIFIED);
+            mem_status = address_space_read(_args->as, reqt.addr,
+                                            MEMTXATTRS_UNSPECIFIED,
+                                            resp.pte, reqt.bytes);
             resp.bytes = mem_status == MEMTX_OK ? reqt.bytes : 0;
         }
 
