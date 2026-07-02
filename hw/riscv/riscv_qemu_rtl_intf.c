@@ -2,6 +2,7 @@
 #include "exec/memattrs.h"
 #include "chardev/char.h"
 #include "riscv-iommu.h"
+#include "qemu/main-loop.h"
 #include "trace.h"
 
 #include "riscv_qemu_rtl_intf.h"
@@ -53,8 +54,10 @@ MemTxResult rtl_mmio_rmw(hwaddr addr, bool is_write, bool is_8bytes,
     }
 
     /* Waiting for AHB response from QRB */
+    bql_unlock();
     chardev_status = qemu_chr_fe_read_all(ahb_fe, (uint8_t*)&strans,
                                           sizeof(strans));
+    bql_lock();
     if (chardev_status < 0) {
         return MEMTX_ERROR;
     }
@@ -116,7 +119,9 @@ hwaddr rtl_lti_translate(hwaddr iova, bool is_write, bool is_priv,
     }
 
     /* Waiting for LTI response from QRB */
+    bql_unlock();
     chardev_status = qemu_chr_fe_read_all(lti_fe, (uint8_t*)&resp, sizeof(resp));
+    bql_lock();
     if (chardev_status == -1) {
         return 0;
     }
