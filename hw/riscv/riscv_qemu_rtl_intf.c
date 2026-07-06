@@ -25,8 +25,8 @@ MemTxResult rtl_mmio_rmw(hwaddr addr, bool is_write, bool is_8bytes,
                          CharFrontend *ahb_fe)
 {
     int chardev_status;
-    ahb3lite_master_s mtrans;
-    ahb3lite_slave_s strans;
+    ahb3lite_master_reqt_s mtrans;
+    ahb3lite_slave_resp_s strans;
 
     if (!qemu_chr_fe_backend_open(ahb_fe)) {
         /* Charbackend is not open */
@@ -161,8 +161,8 @@ static void axi4_event_handler(void *opaque, QEMUChrEvent event)
 
 void *rtl_dram_access(void *args)
 {
-    axi4_reqt_t reqt;
-    axi4_resp_t resp;
+    axi4_reqt_s reqt;
+    axi4_resp_s resp;
     ssize_t bytes;
     MemTxResult mem_status;
     CharFrontend axi4_fe;
@@ -202,7 +202,7 @@ void *rtl_dram_access(void *args)
 
         /** If operation successful, operation returns number of bytes read/written,
          * else it returns 0 */
-        resp.resp = mem_status == MEMTX_OK ? AXI4_OKAY : AXI4_SLVERR;
+        resp.resp = mem_status == MEMTX_OK ? OKAY : SLVERR;
         resp.bytes = mem_status == MEMTX_OK ? reqt.bytes : 0;
 
         /* Writing memory response to QRB */

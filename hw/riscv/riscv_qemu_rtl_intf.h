@@ -31,14 +31,14 @@ typedef struct {
 
     uint32_t haddr;
     uint64_t hwdata;
-} ahb3lite_master_s;
+} ahb3lite_master_reqt_s;
 
 /* AHB3Lite Slave Transaction */
 typedef struct {
     bool hresp;
 
     uint64_t hrdata;
-} ahb3lite_slave_s;
+} ahb3lite_slave_resp_s;
 
 /**
  * @brief Event handler for AHB socket device events
@@ -182,10 +182,10 @@ hwaddr rtl_lti_translate(hwaddr iova, bool is_write, bool is_priv,
 
 /* AXI4 Response Status */
 typedef enum {
-    AXI4_OKAY,
-    AXI4_EXOKAY,
-    AXI4_SLVERR,
-    AXI4_DECERR
+    OKAY,
+    EXOKAY,
+    SLVERR,
+    DECERR
 } axi4_access_t;
 
 /* Permissions */
@@ -208,7 +208,7 @@ typedef struct {
 
     size_t bytes;
     uint8_t write_data[MAX_PTE_BYTES];
-} axi4_reqt_t;
+} axi4_reqt_s;
 
 /* AXI4 Response */
 typedef struct {
@@ -216,7 +216,7 @@ typedef struct {
 
     size_t bytes;
     uint8_t pte[MAX_PTE_BYTES];
-} axi4_resp_t;
+} axi4_resp_s;
 
 /**
  * @brief Thread handling incoming AXI4 transactions from RTL
