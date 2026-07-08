@@ -53,15 +53,8 @@ MemTxResult rtl_mmio_rmw(hwaddr addr, bool is_write, bool is_8bytes,
         return MEMTX_ERROR;
     }
 
-    /* Waiting for AHB response from QRB */
-    if (qemu_in_main_thread()) {
-        bql_unlock();
-    }
     chardev_status = qemu_chr_fe_read_all(ahb_fe, (uint8_t*)&strans,
                                           sizeof(strans));
-    if (!bql_locked()) {
-        bql_lock();
-    }
     if (chardev_status < 0) {
         return MEMTX_ERROR;
     }
@@ -123,13 +116,8 @@ hwaddr rtl_lti_translate(hwaddr iova, bool is_write, bool is_priv,
     }
 
     /* Waiting for LTI response from QRB */
-    if (qemu_in_main_thread()) {
-        bql_unlock();
-    }
     chardev_status = qemu_chr_fe_read_all(lti_fe, (uint8_t*)&resp, sizeof(resp));
-    if (!bql_locked()) {
-        bql_lock();
-    }
+
     if (chardev_status == -1) {
         return 0;
     }
@@ -155,7 +143,7 @@ hwaddr rtl_lti_translate(hwaddr iova, bool is_write, bool is_priv,
 }
 
 /* AXI */
-static void axi4_event_handler(void *opaque, QEMUChrEvent event)
+void axi4_event_handler(void *opaque, QEMUChrEvent event)
 {
     CharFrontend *fe = opaque;
     switch (event) {
@@ -167,59 +155,50 @@ static void axi4_event_handler(void *opaque, QEMUChrEvent event)
     }
 }
 
-void *rtl_dram_access(void *args)
+void rtl_dram_access(void *opaque)
 {
     axi4_reqt_s reqt;
     axi4_resp_s resp;
     ssize_t bytes;
     MemTxResult mem_status;
-    CharFrontend axi4_fe;
 
-    axi4_th_args_s *_args = args;
-    Error *errp;
-    /* Initializing chardev frontend */
-    qemu_chr_fe_init(&axi4_fe, _args->axi4_chardev, &errp);
-    qemu_chr_fe_set_handlers(&axi4_fe, NULL, NULL, axi4_event_handler,
-                             NULL, &axi4_fe, NULL, true);
+    CharFrontend *axi4_fe = opaque;
 
-    while (true) {
-        /* Thread initially waits on RTL to send memory access */
-        bytes = qemu_chr_fe_read_all(&axi4_fe, (uint8_t *)&reqt, sizeof(reqt));
+    /* Thread initially waits on RTL to send memory access */
+    bytes = qemu_chr_fe_read_all(axi4_fe, (uint8_t *)&reqt, sizeof(reqt));
 
-        /* Unable to read socket, exit thread */
-        if (bytes <= 0) {
-            break;
-        }
-
-        trace_qrb_axi4_reqt(reqt.addr,
-                            (reqt.is_write ? "WRITE" : "READ"),
-                            reqt.bytes);
-        /* Performing required dma_memory_* function based on type of request */
-        if (reqt.is_write) {
-            mem_status = dma_memory_write(_args->as, reqt.addr,
-                                          reqt.write_data, reqt.bytes,
-                                          MEMTXATTRS_UNSPECIFIED);
-            /* Reponse PTE is all zeros if write operation */
-            bzero(resp.pte, sizeof(resp.pte));
-        } else {
-            mem_status = dma_memory_read(_args->as, reqt.addr,
-                                         resp.pte, reqt.bytes,
-                                         MEMTXATTRS_UNSPECIFIED);
-            resp.bytes = mem_status == MEMTX_OK ? reqt.bytes : 0;
-        }
-
-        /** If operation successful, operation returns number of bytes read/written,
-         * else it returns 0 */
-        resp.resp = mem_status == MEMTX_OK ? OKAY : SLVERR;
-        resp.bytes = mem_status == MEMTX_OK ? reqt.bytes : 0;
-
-        /* Writing memory response to QRB */
-        bytes = qemu_chr_fe_write_all(&axi4_fe, (uint8_t *)&resp, sizeof(resp));
-        /* Unable to write to socket, exit thread */
-        if (bytes <= 0) {
-            break;
-        }
-        trace_qrb_axi4_resp(mem_status == MEMTX_OK ? "OKAY" : "SLVERR");
+    /* Unable to read socket, exit thread */
+    if (bytes <= 0) {
+        return;
     }
-    return NULL;
+
+    trace_qrb_axi4_reqt(reqt.addr,
+                        (reqt.is_write ? "WRITE" : "READ"),
+                        reqt.bytes);
+    /* Performing required dma_memory_* function based on type of request */
+    if (reqt.is_write) {
+        mem_status = dma_memory_write(&address_space_memory, reqt.addr,
+                                      reqt.write_data, reqt.bytes,
+                                      MEMTXATTRS_UNSPECIFIED);
+        /* Reponse PTE is all zeros if write operation */
+        bzero(resp.pte, sizeof(resp.pte));
+    } else {
+        mem_status = dma_memory_read(&address_space_memory, reqt.addr,
+                                     resp.pte, reqt.bytes,
+                                     MEMTXATTRS_UNSPECIFIED);
+        resp.bytes = mem_status == MEMTX_OK ? reqt.bytes : 0;
+    }
+
+    /** If operation successful, operation returns number of bytes read/written,
+     * else it returns 0 */
+    resp.resp = mem_status == MEMTX_OK ? OKAY : SLVERR;
+    resp.bytes = mem_status == MEMTX_OK ? reqt.bytes : 0;
+
+    /* Writing memory response to QRB */
+    bytes = qemu_chr_fe_write_all(axi4_fe, (uint8_t *)&resp, sizeof(resp));
+    /* Unable to write to socket, exit thread */
+    if (bytes <= 0) {
+        return;
+    }
+    trace_qrb_axi4_resp(mem_status == MEMTX_OK ? "OKAY" : "SLVERR");
 }

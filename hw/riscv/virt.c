@@ -19,6 +19,9 @@
  */
 
 #include "qemu/osdep.h"
+#include "chardev/char-fe.h"
+#include "qemu/compiler.h"
+#include "qemu/main-loop.h"
 #include "qemu/units.h"
 #include "qemu/error-report.h"
 #include "qemu/guest-random.h"
@@ -1526,7 +1529,7 @@ static void virt_machine_init(MachineState *machine)
     MemoryRegion *system_memory = get_system_memory();
     MemoryRegion *mask_rom = g_new(MemoryRegion, 1);
     DeviceState *mmio_irqchip, *virtio_irqchip, *pcie_irqchip;
-    int i, base_hartid, hart_count;
+    int i, base_hartid, hart_count, fd;
     int socket_count = riscv_socket_count(machine);
 
     s->memmap = virt_memmap;
@@ -1743,12 +1746,14 @@ static void virt_machine_init(MachineState *machine)
         sysbus_realize_and_unref(SYS_BUS_DEVICE(iommu_sys), &error_fatal);
     }
 
-    /* Initializing thread to deal with RTL memory accesses */
-    /* AXI4 chardev */
-    /* TODO: Update this to fetch cmd line arguments via parsing for serial devices */
-    s->axi4_th_args.axi4_chardev = serial_hd(1);
-    s->axi4_th_args.as = &address_space_memory;
-    pthread_create(&s->axi4_thread, NULL, rtl_dram_access, (void *)&s->axi4_th_args);
+    qemu_chr_fe_init(&s->axi4_fe, serial_hd(1), &error_fatal);
+    qemu_chr_fe_set_handlers(&s->axi4_fe, NULL, NULL, axi4_event_handler,
+                             NULL, &s->axi4_fe, NULL, true);
+    if ((fd = qemu_chr_fe_get_msgfd(&s->axi4_fe)) == -1) {
+        error_setg(&error_fatal, "Unable to open AXI4 interface");
+    }
+
+    qemu_set_fd_handler(fd, rtl_dram_access, NULL, &s->axi4_fe);
 
     s->machine_done.notify = virt_machine_done;
     qemu_add_machine_init_done_notifier(&s->machine_done);
@@ -1988,19 +1993,12 @@ static void virt_machine_class_init(ObjectClass *oc, const void *data)
                                           "Enable IOMMU platform device");
 }
 
-static void virt_machine_instance_finalize(Object *obj)
-{
-    RISCVVirtState *s = RISCV_VIRT_MACHINE(obj);
-    pthread_kill(s->axi4_thread, 9);
-}
-
 static const TypeInfo virt_machine_typeinfo = {
     .name       = MACHINE_TYPE_NAME("virt"),
     .parent     = TYPE_MACHINE,
     .class_init = virt_machine_class_init,
     .instance_init = virt_machine_instance_init,
     .instance_size = sizeof(RISCVVirtState),
-    .instance_finalize = virt_machine_instance_finalize,
     .interfaces = (const InterfaceInfo[]) {
          { TYPE_HOTPLUG_HANDLER },
          { }

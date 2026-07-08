@@ -218,16 +218,5 @@ typedef struct {
     uint8_t pte[MAX_PTE_BYTES];
 } axi4_resp_s;
 
-/**
- * @brief Thread handling incoming AXI4 transactions from RTL
- *
- * @param args->axi4_fe Chardev Frontend to read and write data from
- * @param args->as      Address Space of Virt Machine
- *
- */
-typedef struct {
-    Chardev *axi4_chardev;
-    AddressSpace *as;
-} axi4_th_args_s;
-
-void *rtl_dram_access(void *args);
+void axi4_event_handler(void *opaque, QEMUChrEvent event);
+void rtl_dram_access(void *args);
