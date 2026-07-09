@@ -30,8 +30,10 @@
 #include "qemu/timer.h"
 #include "qom/object.h"
 #include "qemu/main-loop.h" /* iothread mutex */
-#include "qemu/module.h"
-#include "qapi/visitor.h"
+#include "chardev/char.h"
+#include "chardev/char-fe.h"
+#include "hw/core/qdev-properties.h"
+#include "hw/riscv/riscv_qemu_rtl_intf.h"
 
 #define TYPE_PCI_EDU_DEVICE "edu"
 typedef struct EduState EduState;
@@ -75,6 +77,8 @@ struct EduState {
     QEMUTimer dma_timer;
     char dma_buf[DMA_SIZE];
     uint64_t dma_mask;
+    Chardev *lti_chrdev;
+    CharFrontend lti_fe;
 };
 
 static bool edu_msi_enabled(EduState *edu)
@@ -141,23 +145,31 @@ static void edu_dma_timer(void *opaque)
 {
     EduState *edu = opaque;
     bool raise_irq = false;
+    hwaddr translated_addr;
+    // EDU_DMA_FROM_PCI = 0, EDU_DMA_TO_PCI = 1
+    bool dma_to_pci = EDU_DMA_DIR(edu->dma.cmd);
 
     if (!(edu->dma.cmd & EDU_DMA_RUN)) {
         return;
     }
 
+    translated_addr = rtl_lti_translate(edu_clamp_addr(edu,
+                                                       dma_to_pci ?
+                                                       edu->dma.dst :
+                                                       edu->dma.src),
+                                        edu->dma.cmd == EDU_DMA_TO_PCI,
+                                        false, 8, false, 0, &edu->lti_fe);
+
     if (EDU_DMA_DIR(edu->dma.cmd) == EDU_DMA_FROM_PCI) {
         uint64_t dst = edu->dma.dst;
         edu_check_range(dst, edu->dma.cnt, DMA_START, DMA_SIZE);
         dst -= DMA_START;
-        pci_dma_read(&edu->pdev, edu_clamp_addr(edu, edu->dma.src),
-                edu->dma_buf + dst, edu->dma.cnt);
+        pci_dma_read(&edu->pdev, translated_addr, edu->dma_buf + dst, edu->dma.cnt);
     } else {
         uint64_t src = edu->dma.src;
         edu_check_range(src, edu->dma.cnt, DMA_START, DMA_SIZE);
         src -= DMA_START;
-        pci_dma_write(&edu->pdev, edu_clamp_addr(edu, edu->dma.dst),
-                edu->dma_buf + src, edu->dma.cnt);
+        pci_dma_write(&edu->pdev, translated_addr, edu->dma_buf + src, edu->dma.cnt);
     }
 
     edu->dma.cmd &= ~EDU_DMA_RUN;
@@ -384,6 +396,10 @@ static void pci_edu_realize(PCIDevice *pdev, Error **errp)
     qemu_thread_create(&edu->thread, "edu", edu_fact_thread,
                        edu, QEMU_THREAD_JOINABLE);
 
+    /* Initializing lti frontend */
+    qemu_chr_fe_init(&edu->lti_fe, edu->lti_chrdev, errp);
+    qemu_chr_fe_set_handlers(&edu->lti_fe, NULL, NULL, lti_event_handler,
+                             NULL, &edu->lti_fe, NULL, true);
     memory_region_init_io(&edu->mmio, OBJECT(edu), &edu_mmio_ops, edu,
                     "edu-mmio", 1 * MiB);
     pci_register_bar(pdev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY, &edu->mmio);
@@ -413,6 +429,11 @@ static void edu_instance_init(Object *obj)
     edu->dma_mask = (1UL << 28) - 1;
     object_property_add_uint64_ptr(obj, "dma_mask",
                                    &edu->dma_mask, OBJ_PROP_FLAG_READWRITE);
+    // TODO: TYPE_CHARDEV -> TYPE_CHARDEV_MUX when using multiple devices
+    object_property_add_link(obj, "lti_intf", TYPE_CHARDEV,
+                             (Object **)&edu->lti_chrdev,
+                             qdev_prop_allow_set_link_before_realize,
+                             0);
 }
 
 static void edu_class_init(ObjectClass *class, const void *data)

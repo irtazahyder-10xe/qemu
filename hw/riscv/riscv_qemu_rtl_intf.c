@@ -76,11 +76,11 @@ MemTxResult rtl_mmio_rmw(hwaddr addr, bool is_write, bool is_8bytes,
 
 void lti_event_handler(void *opaque, QEMUChrEvent event)
 {
-    RISCVIOMMUState *s = RISCV_IOMMU(opaque);
+    CharFrontend *fe = opaque;
     /* Upon OPEN, send reqt to server to register QEMU LTI requestor */
     switch (event) {
         case CHR_EVENT_OPENED:
-            qemu_chr_fe_write_all(&s->lti_fe, (uint8_t *) "reqt", 4);
+            qemu_chr_fe_write_all(fe, (uint8_t *) "reqt", 4);
             break;
         default:
             break;

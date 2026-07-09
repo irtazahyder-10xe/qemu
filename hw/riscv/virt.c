@@ -19,7 +19,6 @@
  */
 
 #include "qemu/osdep.h"
-#include "chardev/char-fe.h"
 #include "qemu/compiler.h"
 #include "qemu/main-loop.h"
 #include "qemu/units.h"
@@ -61,6 +60,7 @@
 #include "qapi/qapi-visit-common.h"
 #include "hw/virtio/virtio-iommu.h"
 #include "hw/uefi/var-service-api.h"
+#include "chardev/char-fe.h"
 
 #include "riscv_qemu_rtl_intf.h"
 #include <signal.h>
@@ -1749,7 +1749,7 @@ static void virt_machine_init(MachineState *machine)
     qemu_chr_fe_init(&s->axi4_fe, serial_hd(1), &error_fatal);
     qemu_chr_fe_set_handlers(&s->axi4_fe, NULL, rtl_dram_access, axi4_event_handler,
                              NULL, &s->axi4_fe, NULL, true);
-    
+
     s->machine_done.notify = virt_machine_done;
     qemu_add_machine_init_done_notifier(&s->machine_done);
 }

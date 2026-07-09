@@ -2491,6 +2491,8 @@ static void riscv_iommu_instance_init(Object *obj)
 
     s->iommus.le_next = NULL;
     s->iommus.le_prev = NULL;
+    // Setting base IOMMU mode to BARE by default
+    s->enable_off = false;
     QLIST_INIT(&s->spaces);
 }
 
@@ -2623,10 +2625,6 @@ static void riscv_iommu_realize(DeviceState *dev, Error **errp)
     // qemu_chr_fe_init(&s->ahb3lite_fe, s->ahb3lite, errp);
     qemu_chr_fe_set_handlers(&s->ahb3lite_fe, NULL, NULL, ahb3lite_event_handler,
                              NULL, s, NULL, true);
-    /* Initializing lti frontend */
-    // qemu_chr_fe_init(&s->lti_fe, s->lti, errp);
-    qemu_chr_fe_set_handlers(&s->lti_fe, NULL, NULL, lti_event_handler,
-                             NULL, s, NULL, true);
 }
 
 static void riscv_iommu_unrealize(DeviceState *dev)
@@ -2689,7 +2687,6 @@ static const Property riscv_iommu_properties[] = {
     DEFINE_PROP_LINK("downstream-mr", RISCVIOMMUState, target_mr,
         TYPE_MEMORY_REGION, MemoryRegion *),
     DEFINE_PROP_CHR("ahb3lite", RISCVIOMMUState, ahb3lite_fe),
-    DEFINE_PROP_CHR("lti", RISCVIOMMUState, lti_fe),
     DEFINE_PROP_UINT8("hpm-counters", RISCVIOMMUState, hpm_cntrs,
                       RISCV_IOMMU_IOCOUNT_NUM),
 };
@@ -2734,33 +2731,27 @@ static IOMMUTLBEntry riscv_iommu_memory_region_translate(
         .perm = flag,
     };
     /* Bypassed */
-    // RISCVIOMMUContext *ctx;
-    // void *ref;
+    RISCVIOMMUContext *ctx;
+    void *ref;
 
-    // ctx = riscv_iommu_ctx(as->iommu, as->devid, iommu_idx, &ref);
-    // if (ctx == NULL) {
-    //     /* Translation disabled or invalid. */
-    //     iotlb.addr_mask = 0;
-    //     iotlb.perm = IOMMU_NONE;
-    // } else if (riscv_iommu_translate(as->iommu, ctx, &iotlb, true)) {
-    //     /* Translation disabled or fault reported. */
-    //     iotlb.addr_mask = 0;
-    //     iotlb.perm = IOMMU_NONE;
-    // }
+    ctx = riscv_iommu_ctx(as->iommu, as->devid, iommu_idx, &ref);
+    if (ctx == NULL) {
+        /* Translation disabled or invalid. */
+        iotlb.addr_mask = 0;
+        iotlb.perm = IOMMU_NONE;
+    } else if (riscv_iommu_translate(as->iommu, ctx, &iotlb, true)) {
+        /* Translation disabled or fault reported. */
+        iotlb.addr_mask = 0;
+        iotlb.perm = IOMMU_NONE;
+    }
 
-    // /* Trace all dma translations with original access flags. */
-    // trace_riscv_iommu_dma(as->iommu->parent_obj.id, PCI_BUS_NUM(as->devid),
-    //                       PCI_SLOT(as->devid), PCI_FUNC(as->devid), iommu_idx,
-    //                       IOMMU_FLAG_STR[flag & IOMMU_RW], iotlb.iova,
-    //                       iotlb.translated_addr);
+    /* Trace all dma translations with original access flags. */
+    trace_riscv_iommu_dma(as->iommu->parent_obj.id, PCI_BUS_NUM(as->devid),
+                          PCI_SLOT(as->devid), PCI_FUNC(as->devid), iommu_idx,
+                          IOMMU_FLAG_STR[flag & IOMMU_RW], iotlb.iova,
+                          iotlb.translated_addr);
 
-    // riscv_iommu_ctx_put(as->iommu, ref);
-
-    /* For now keeping translations as unprivileged access */
-    iotlb.translated_addr = rtl_lti_translate(addr, (flag == IOMMU_WO),
-                                              false, // (flag & 0x8) >> 3,
-                                              as->devid, false, iommu_idx,
-                                              &as->iommu->lti_fe);
+    riscv_iommu_ctx_put(as->iommu, ref);
 
     /* The address mask depends on which level the PTE was found i.e. superpage or 4KB page
      * defaulting the mask to 4KB page*/
