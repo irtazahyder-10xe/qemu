@@ -219,4 +219,4 @@ typedef struct {
 } axi4_resp_s;
 
 void axi4_event_handler(void *opaque, QEMUChrEvent event);
-void rtl_dram_access(void *args);
+void rtl_dram_access(void *opaque, const uint8_t *buf, int size);

@@ -1529,7 +1529,7 @@ static void virt_machine_init(MachineState *machine)
     MemoryRegion *system_memory = get_system_memory();
     MemoryRegion *mask_rom = g_new(MemoryRegion, 1);
     DeviceState *mmio_irqchip, *virtio_irqchip, *pcie_irqchip;
-    int i, base_hartid, hart_count, fd;
+    int i, base_hartid, hart_count;
     int socket_count = riscv_socket_count(machine);
 
     s->memmap = virt_memmap;
@@ -1747,14 +1747,9 @@ static void virt_machine_init(MachineState *machine)
     }
 
     qemu_chr_fe_init(&s->axi4_fe, serial_hd(1), &error_fatal);
-    qemu_chr_fe_set_handlers(&s->axi4_fe, NULL, NULL, axi4_event_handler,
+    qemu_chr_fe_set_handlers(&s->axi4_fe, NULL, rtl_dram_access, axi4_event_handler,
                              NULL, &s->axi4_fe, NULL, true);
-    if ((fd = qemu_chr_fe_get_msgfd(&s->axi4_fe)) == -1) {
-        error_setg(&error_fatal, "Unable to open AXI4 interface");
-    }
-
-    qemu_set_fd_handler(fd, rtl_dram_access, NULL, &s->axi4_fe);
-
+    
     s->machine_done.notify = virt_machine_done;
     qemu_add_machine_init_done_notifier(&s->machine_done);
 }

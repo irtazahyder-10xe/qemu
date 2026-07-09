@@ -155,22 +155,17 @@ void axi4_event_handler(void *opaque, QEMUChrEvent event)
     }
 }
 
-void rtl_dram_access(void *opaque)
+void rtl_dram_access(void *opaque, const uint8_t *buf, int size)
 {
     axi4_reqt_s reqt;
     axi4_resp_s resp;
-    ssize_t bytes;
     MemTxResult mem_status;
 
     CharFrontend *axi4_fe = opaque;
+    memcpy(&reqt, buf, sizeof(reqt));
 
     /* Thread initially waits on RTL to send memory access */
-    bytes = qemu_chr_fe_read_all(axi4_fe, (uint8_t *)&reqt, sizeof(reqt));
-
-    /* Unable to read socket, exit thread */
-    if (bytes <= 0) {
-        return;
-    }
+    // bytes = qemu_chr_fe_read_all(axi4_fe, (uint8_t *)&reqt, sizeof(reqt));
 
     trace_qrb_axi4_reqt(reqt.addr,
                         (reqt.is_write ? "WRITE" : "READ"),
@@ -195,9 +190,9 @@ void rtl_dram_access(void *opaque)
     resp.bytes = mem_status == MEMTX_OK ? reqt.bytes : 0;
 
     /* Writing memory response to QRB */
-    bytes = qemu_chr_fe_write_all(axi4_fe, (uint8_t *)&resp, sizeof(resp));
+    size = qemu_chr_fe_write_all(axi4_fe, (uint8_t *)&resp, sizeof(resp));
     /* Unable to write to socket, exit thread */
-    if (bytes <= 0) {
+    if (size == 0) {
         return;
     }
     trace_qrb_axi4_resp(mem_status == MEMTX_OK ? "OKAY" : "SLVERR");
