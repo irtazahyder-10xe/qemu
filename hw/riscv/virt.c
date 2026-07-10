@@ -1747,7 +1747,8 @@ static void virt_machine_init(MachineState *machine)
     }
 
     qemu_chr_fe_init(&s->axi4_fe, serial_hd(1), &error_fatal);
-    qemu_chr_fe_set_handlers(&s->axi4_fe, rtl_can_dram_access, rtl_dram_access, axi4_event_handler,
+    qemu_chr_fe_set_handlers(&s->axi4_fe, rtl_can_dram_access,
+                             rtl_dram_access, axi4_event_handler,
                              NULL, &s->axi4_fe, NULL, true);
 
     s->machine_done.notify = virt_machine_done;

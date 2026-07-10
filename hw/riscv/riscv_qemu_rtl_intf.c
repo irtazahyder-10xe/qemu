@@ -1,9 +1,14 @@
 #include "qemu/osdep.h"
 #include "exec/memattrs.h"
+#include "system/dma.h"
 #include "chardev/char.h"
+#include "qemu/thread.h"
 #include "trace.h"
 
 #include "riscv_qemu_rtl_intf.h"
+
+QemuCond lti_resp_wait_cond;
+QemuMutex lti_resp_mutex;
 
 void default_rtl_protocol_event_handler(void *opaque, QEMUChrEvent event, const char id_str[5])
 {
@@ -79,17 +84,65 @@ MemTxResult rtl_mmio_rmw(hwaddr addr, bool is_write, bool is_8bytes,
 
 void lti_event_handler(void *opaque, QEMUChrEvent event)
 {
-    default_rtl_protocol_event_handler(opaque, event, "reqt");
+    lti_args_s *lti_args = opaque;
+    /* Upon OPEN, send id string to QRB server */
+    switch (event) {
+        case CHR_EVENT_OPENED:
+            /* Initializing locks and mutexes */
+            qemu_cond_init(&lti_resp_wait_cond);
+            qemu_mutex_init(&lti_resp_mutex);
+            /* Writing ID to LTI socket intf */
+            qemu_chr_fe_write_all(&lti_args->lti_fe, (uint8_t *) "reqt", 4);
+            break;
+        default:
+            break;
+    }
+    // default_rtl_protocol_event_handler(opaque, event, "reqt");
 }
 
-hwaddr rtl_lti_translate(hwaddr iova, bool is_write, bool is_priv,
-                         uint32_t dev_id, bool proc_id_valid,
-                         uint32_t proc_id, CharFrontend *lti_fe)
+int can_read_lti_response(void *opaque)
+{
+    // Both request and response sizes are 24 bytes, see if we need to add a
+    // check to see if we have request or response
+    return sizeof(lti_LR_s);
+}
+
+void read_lti_response(void *opaque, const uint8_t *buf, int size)
+{
+    const char *resp_status;
+    lti_args_s *lti_args = opaque;
+
+    assert(size == sizeof(lti_LR_s));
+    memcpy(&lti_args->lti_resp, buf, size);
+
+    switch (lti_args->lti_resp.resp) {
+        case LTI_RESP_SUCCESS:
+            resp_status = "SUCCESS";
+            break;
+        case LTI_RESP_MRIF_SUCCESS:
+            resp_status = "MRIF_SUCCESS";
+            break;
+        case LTI_RESP_FAULT_ABORT:
+            resp_status = "FAULT_ABORT";
+            break;
+        default:
+            resp_status = "INVALID_RESP";
+    }
+    trace_qrb_lti_resp(resp_status, lti_args->lti_resp.ppn,
+                       lti_args->lti_resp.mrif_fields,
+                       (lti_args->lti_resp.mrif_fields >> LTI_LRUSER_NPPN_OFFSET) & LTI_LRUSER_NPPN_MASK,
+                       lti_args->lti_resp.mrif_fields & LTI_LRUSER_NID_MASK);
+    qemu_cond_broadcast(&lti_resp_wait_cond);
+}
+
+void rtl_lti_translate(hwaddr iova, bool is_write, bool is_priv,
+                       uint32_t dev_id, bool proc_id_valid,
+                       uint32_t proc_id, CharFrontend *lti_fe)
 {
     lti_LA_s req;
-    lti_LR_s resp;
+    // lti_LR_s resp;
+    // const char *resp_status;
     int chardev_status;
-    const char *resp_status;
 
     req.iova = iova;
     req.dev_id = dev_id;
@@ -107,34 +160,35 @@ hwaddr rtl_lti_translate(hwaddr iova, bool is_write, bool is_priv,
     /* Sending LTI request to QRB */
     chardev_status = qemu_chr_fe_write_all(lti_fe, (uint8_t *)&req, sizeof(req));
     if (chardev_status == -1) {
-        return 0;
+        // return 0;
+        return;
     }
 
     /* Waiting for LTI response from QRB */
-    chardev_status = qemu_chr_fe_read_all(lti_fe, (uint8_t*)&resp, sizeof(resp));
+    // chardev_status = qemu_chr_fe_read_all(lti_fe, (uint8_t*)&resp, sizeof(resp));
 
-    if (chardev_status == -1) {
-        return 0;
-    }
-    switch (resp.resp) {
-        case LTI_RESP_SUCCESS:
-            resp_status = "SUCCESS";
-            break;
-        case LTI_RESP_MRIF_SUCCESS:
-            resp_status = "MRIF_SUCCESS";
-            break;
-        case LTI_RESP_FAULT_ABORT:
-            resp_status = "FAULT_ABORT";
-            break;
-        default:
-            resp_status = "INVALID_RESP";
-    }
-    trace_qrb_lti_resp(resp_status, resp.ppn, resp.mrif_fields,
-                            (resp.mrif_fields >> LTI_LRUSER_NPPN_OFFSET) & LTI_LRUSER_NPPN_MASK,
-                            resp.mrif_fields & LTI_LRUSER_NID_MASK);
+    // if (chardev_status == -1) {
+    //     return 0;
+    // }
+    // switch (resp.resp) {
+    //     case LTI_RESP_SUCCESS:
+    //         resp_status = "SUCCESS";
+    //         break;
+    //     case LTI_RESP_MRIF_SUCCESS:
+    //         resp_status = "MRIF_SUCCESS";
+    //         break;
+    //     case LTI_RESP_FAULT_ABORT:
+    //         resp_status = "FAULT_ABORT";
+    //         break;
+    //     default:
+    //         resp_status = "INVALID_RESP";
+    // }
+    // trace_qrb_lti_resp(resp_status, resp.ppn, resp.mrif_fields,
+    //                         (resp.mrif_fields >> LTI_LRUSER_NPPN_OFFSET) & LTI_LRUSER_NPPN_MASK,
+    //                         resp.mrif_fields & LTI_LRUSER_NID_MASK);
 
-    /* Translation successful, updating iotlb data structure with translated address */
-    return resp.ppn;
+    // /* Translation successful, updating iotlb data structure with translated address */
+    // return resp.ppn;
 }
 
 /* AXI */

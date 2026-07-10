@@ -3,12 +3,16 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
-#include <pthread.h>
 
 #include "chardev/char-fe.h"
 #include "exec/memattrs.h"
 #include "exec/hwaddr.h"
+#include "qemu/thread.h"
+#include "qemu/typedefs.h"
 
+/* QEMU Mutexes and Conditions for managing AXI4 and LTI requests */
+extern QemuCond lti_resp_wait_cond;
+extern QemuMutex lti_resp_mutex;
 /**
  * @brief Default event handler for sockets used to communicate with RTL
  *
@@ -139,6 +143,13 @@ typedef struct {
     uint64_t mrif_fields;
 } lti_LR_s;
 
+/* opaque struct passed to all lti related qemu_chr_fe_set_handlers */
+typedef struct {
+    Chardev *lti_chrdev;
+    CharFrontend lti_fe;
+    lti_LR_s lti_resp;
+} lti_args_s;
+
 /**
  * @brief Event handler for LTI socket device events
  *
@@ -153,7 +164,12 @@ typedef struct {
  *       is subjected to change and the frontend would be initialized in
  *       IO DEVICE.
  */
+
 void lti_event_handler(void *opaque, QEMUChrEvent event);
+
+int can_read_lti_response(void *opaque);
+
+void read_lti_response(void *opaque, const uint8_t *buf, int size);
 
 /**
  * @brief QEMU -> RTL IOVA translation request
@@ -173,9 +189,9 @@ void lti_event_handler(void *opaque, QEMUChrEvent event);
  *       is subjected to change and the frontend would be initialized in
  *       IO DEVICE.
  */
-hwaddr rtl_lti_translate(hwaddr iova, bool is_write, bool is_priv,
-                         uint32_t dev_id, bool proc_id_valid,
-                         uint32_t proc_id, CharFrontend *lti_fe);
+void rtl_lti_translate(hwaddr iova, bool is_write, bool is_priv,
+                       uint32_t dev_id, bool proc_id_valid,
+                       uint32_t proc_id, CharFrontend *lti_fe);
 
 /* ============= AMBA AXI4 Protocol ============= */
 /* Maximum size of PTE fetched from memory (in bytes) */
