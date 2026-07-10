@@ -9,11 +9,11 @@
 
 void ahb3lite_event_handler(void *opaque, QEMUChrEvent event)
 {
-    RISCVIOMMUState *s = RISCV_IOMMU(opaque);
+    CharFrontend *fe = opaque;
     /* Upon OPEN, send reqt to server to register QEMU AHB requestor */
     switch (event) {
         case CHR_EVENT_OPENED:
-            qemu_chr_fe_write_all(&s->ahb3lite_fe, (uint8_t *) "reqt", 4);
+            qemu_chr_fe_write_all(fe, (uint8_t *) "reqt", 4);
             break;
         default:
             break;
@@ -153,6 +153,11 @@ void axi4_event_handler(void *opaque, QEMUChrEvent event)
         default:
             break;
     }
+}
+
+int rtl_can_dram_access(void *opaque)
+{
+    return opaque ? sizeof(axi4_reqt_s) : 0;
 }
 
 void rtl_dram_access(void *opaque, const uint8_t *buf, int size)

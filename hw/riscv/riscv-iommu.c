@@ -2624,7 +2624,7 @@ static void riscv_iommu_realize(DeviceState *dev, Error **errp)
     /* Initializing ahb3lite frontend */
     // qemu_chr_fe_init(&s->ahb3lite_fe, s->ahb3lite, errp);
     qemu_chr_fe_set_handlers(&s->ahb3lite_fe, NULL, NULL, ahb3lite_event_handler,
-                             NULL, s, NULL, true);
+                             NULL, &s->ahb3lite_fe, NULL, true);
 }
 
 static void riscv_iommu_unrealize(DeviceState *dev)
