@@ -8,10 +8,18 @@
 #include "chardev/char-fe.h"
 #include "exec/memattrs.h"
 #include "exec/hwaddr.h"
-#include "system/memory.h"
 
-// TODO: Make generic fe_event handler
-// TODO: Update naming scheme for all protocols to be consistent
+/**
+ * @brief Default event handler for sockets used to communicate with RTL
+ *
+ * This function is the callback for qemu_chr_fe_set_handlers for chardev frontends.
+ *
+ * @param opaque Pointer to the used CharFrontend
+ * @param event  Event due to which callback triggered
+ * @param id_str 4 byte id string to send QRB, last character is always NULL terminator.
+ */
+void default_rtl_protocol_event_handler(void *opaque, QEMUChrEvent event, const char id_str[5]);
+
 /* ============= AMBA 3 ABH-Lite Protocol ============= */
 
 /* AHB-Lite 3 Protocol Macros */

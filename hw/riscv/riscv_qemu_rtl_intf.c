@@ -1,23 +1,26 @@
 #include "qemu/osdep.h"
 #include "exec/memattrs.h"
 #include "chardev/char.h"
-#include "riscv-iommu.h"
-#include "qemu/main-loop.h"
 #include "trace.h"
 
 #include "riscv_qemu_rtl_intf.h"
 
-void ahb3lite_event_handler(void *opaque, QEMUChrEvent event)
+void default_rtl_protocol_event_handler(void *opaque, QEMUChrEvent event, const char id_str[5])
 {
     CharFrontend *fe = opaque;
-    /* Upon OPEN, send reqt to server to register QEMU AHB requestor */
+    /* Upon OPEN, send id string to QRB server */
     switch (event) {
         case CHR_EVENT_OPENED:
-            qemu_chr_fe_write_all(fe, (uint8_t *) "reqt", 4);
+            qemu_chr_fe_write_all(fe, (uint8_t *) id_str, 4);
             break;
         default:
             break;
     }
+}
+
+void ahb3lite_event_handler(void *opaque, QEMUChrEvent event)
+{
+    default_rtl_protocol_event_handler(opaque, event, "reqt");
 }
 
 MemTxResult rtl_mmio_rmw(hwaddr addr, bool is_write, bool is_8bytes,
@@ -76,15 +79,7 @@ MemTxResult rtl_mmio_rmw(hwaddr addr, bool is_write, bool is_8bytes,
 
 void lti_event_handler(void *opaque, QEMUChrEvent event)
 {
-    CharFrontend *fe = opaque;
-    /* Upon OPEN, send reqt to server to register QEMU LTI requestor */
-    switch (event) {
-        case CHR_EVENT_OPENED:
-            qemu_chr_fe_write_all(fe, (uint8_t *) "reqt", 4);
-            break;
-        default:
-            break;
-    }
+    default_rtl_protocol_event_handler(opaque, event, "reqt");
 }
 
 hwaddr rtl_lti_translate(hwaddr iova, bool is_write, bool is_priv,
@@ -145,14 +140,7 @@ hwaddr rtl_lti_translate(hwaddr iova, bool is_write, bool is_priv,
 /* AXI */
 void axi4_event_handler(void *opaque, QEMUChrEvent event)
 {
-    CharFrontend *fe = opaque;
-    switch (event) {
-        case CHR_EVENT_OPENED:
-            qemu_chr_fe_write_all(fe, (uint8_t *) "resp", 4);
-            break;
-        default:
-            break;
-    }
+    default_rtl_protocol_event_handler(opaque, event, "resp");
 }
 
 int rtl_can_dram_access(void *opaque)
