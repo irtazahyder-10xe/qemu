@@ -132,7 +132,7 @@ void read_lti_response(void *opaque, const uint8_t *buf, int size)
                        lti_args->lti_resp.mrif_fields,
                        (lti_args->lti_resp.mrif_fields >> LTI_LRUSER_NPPN_OFFSET) & LTI_LRUSER_NPPN_MASK,
                        lti_args->lti_resp.mrif_fields & LTI_LRUSER_NID_MASK);
-    qemu_cond_broadcast(&lti_resp_wait_cond);
+    qemu_coroutine_enter(edu_dma_co);
 }
 
 void rtl_lti_translate(hwaddr iova, bool is_write, bool is_priv,

@@ -7,12 +7,14 @@
 #include "chardev/char-fe.h"
 #include "exec/memattrs.h"
 #include "exec/hwaddr.h"
-#include "qemu/thread.h"
-#include "qemu/typedefs.h"
+#include "qemu/coroutine-core.h"
+// #include "qemu/thread.h"
 
 /* QEMU Mutexes and Conditions for managing AXI4 and LTI requests */
-extern QemuCond lti_resp_wait_cond;
-extern QemuMutex lti_resp_mutex;
+// extern QemuCond lti_resp_wait_cond;
+// extern QemuMutex lti_resp_mutex;
+
+extern Coroutine *edu_dma_co;
 /**
  * @brief Default event handler for sockets used to communicate with RTL
  *

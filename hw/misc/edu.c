@@ -30,6 +30,7 @@
 #include "qemu/timer.h"
 #include "qemu/thread.h"
 #include "qom/object.h"
+#include "qemu/coroutine-core.h"
 #include "qemu/main-loop.h" /* iothread mutex */
 #include "chardev/char.h"
 #include "chardev/char-fe.h"
@@ -80,6 +81,8 @@ struct EduState {
     uint64_t dma_mask;
     lti_args_s lti_args;
 };
+
+Coroutine *edu_dma_co;
 
 static bool edu_msi_enabled(EduState *edu)
 {
@@ -143,6 +146,50 @@ static dma_addr_t edu_clamp_addr(const EduState *edu, dma_addr_t addr)
 
 static void edu_dma_timer(void *opaque)
 {
+    qemu_coroutine_enter(edu_dma_co);
+    // bool raise_irq = false;
+    // hwaddr translated_addr;
+    // // EDU_DMA_FROM_PCI = 0, EDU_DMA_TO_PCI = 1
+    // bool dma_to_pci = EDU_DMA_DIR(edu->dma.cmd);
+
+    // if (!(edu->dma.cmd & EDU_DMA_RUN)) {
+    //     return;
+    // }
+
+    // rtl_lti_translate(edu_clamp_addr(edu, dma_to_pci ? edu->dma.dst : edu->dma.src),
+    //                   edu->dma.cmd == EDU_DMA_TO_PCI, false, 8, false, 0,
+    //                   &edu->lti_args.lti_fe);
+
+    // qemu_mutex_lock(&lti_resp_mutex);
+    // qemu_cond_wait(&lti_resp_wait_cond, &lti_resp_mutex);
+    // qemu_mutex_unlock(&lti_resp_mutex);
+
+    // translated_addr = edu->lti_args.lti_resp.ppn;
+
+    // if (EDU_DMA_DIR(edu->dma.cmd) == EDU_DMA_FROM_PCI) {
+    //     uint64_t dst = edu->dma.dst;
+    //     edu_check_range(dst, edu->dma.cnt, DMA_START, DMA_SIZE);
+    //     dst -= DMA_START;
+    //     pci_dma_read(&edu->pdev, translated_addr, edu->dma_buf + dst, edu->dma.cnt);
+    // } else {
+    //     uint64_t src = edu->dma.src;
+    //     edu_check_range(src, edu->dma.cnt, DMA_START, DMA_SIZE);
+    //     src -= DMA_START;
+    //     pci_dma_write(&edu->pdev, translated_addr, edu->dma_buf + src, edu->dma.cnt);
+    // }
+
+    // edu->dma.cmd &= ~EDU_DMA_RUN;
+    // if (edu->dma.cmd & EDU_DMA_IRQ) {
+    //     raise_irq = true;
+    // }
+
+    // if (raise_irq) {
+    //     edu_raise_irq(edu, DMA_IRQ);
+    // }
+}
+
+static void coroutine_fn edu_dma_timer_coroutine(void *opaque)
+{
     EduState *edu = opaque;
     bool raise_irq = false;
     hwaddr translated_addr;
@@ -157,9 +204,7 @@ static void edu_dma_timer(void *opaque)
                       edu->dma.cmd == EDU_DMA_TO_PCI, false, 8, false, 0,
                       &edu->lti_args.lti_fe);
 
-    qemu_mutex_lock(&lti_resp_mutex);
-    qemu_cond_wait(&lti_resp_wait_cond, &lti_resp_mutex);
-    qemu_mutex_unlock(&lti_resp_mutex);
+    qemu_coroutine_yield();
 
     translated_addr = edu->lti_args.lti_resp.ppn;
 
@@ -184,6 +229,7 @@ static void edu_dma_timer(void *opaque)
         edu_raise_irq(edu, DMA_IRQ);
     }
 }
+
 
 static void dma_rw(EduState *edu, bool write, dma_addr_t *val, dma_addr_t *dma,
                 bool timer)
@@ -392,6 +438,7 @@ static void pci_edu_realize(PCIDevice *pdev, Error **errp)
         return;
     }
 
+    edu_dma_co = qemu_coroutine_create(edu_dma_timer_coroutine, edu);
     timer_init_ms(&edu->dma_timer, QEMU_CLOCK_VIRTUAL, edu_dma_timer, edu);
 
     qemu_mutex_init(&edu->thr_mutex);
