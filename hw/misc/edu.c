@@ -92,6 +92,22 @@ static bool edu_msi_enabled(EduState *edu)
     return msi_enabled(&edu->pdev);
 }
 
+static inline uint8_t msi_flags_off(const PCIDevice* dev)
+{
+    return dev->msi_cap + PCI_MSI_FLAGS;
+}
+
+static inline unsigned int msi_nr_vectors(uint16_t flags)
+{
+    return 1U <<
+        ((flags & PCI_MSI_FLAGS_QSIZE) >> ctz32(PCI_MSI_FLAGS_QSIZE));
+}
+
+static inline uint8_t msi_pending_off(const PCIDevice* dev, bool msi64bit)
+{
+    return dev->msi_cap + (msi64bit ? PCI_MSI_PENDING_64 : PCI_MSI_PENDING_32);
+}
+
 static void edu_raise_irq(EduState *edu, uint32_t val)
 {
     edu->irq_status |= val;
@@ -108,7 +124,20 @@ static void edu_raise_irq(EduState *edu, uint32_t val)
 static void coroutine_fn edu_msi_irq_co(void *opaque)
 {
     EduState *edu = opaque;
+    PCIDevice *dev = &edu->pdev;
+    uint32_t vector = 0;
+    uint16_t flags = pci_get_word(dev->config + msi_flags_off(dev));
+    bool msi64bit = flags & PCI_MSI_FLAGS_64BIT;
+    unsigned int nr_vectors = msi_nr_vectors(flags);
     MSIMessage msg;
+
+    assert(vector < nr_vectors);
+    if (msi_is_masked(dev, vector)) {
+        assert(flags & PCI_MSI_FLAGS_MASKBIT);
+        pci_long_test_and_set_mask(
+            dev->config + msi_pending_off(dev, msi64bit), 1U << vector);
+        return;
+    }
 
     msg = msi_get_message(&edu->pdev, 0);
 
