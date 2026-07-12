@@ -82,7 +82,9 @@ struct EduState {
     lti_args_s lti_args;
 };
 
+/* Global co-routines used by EDU and required by read_lti_response */
 Coroutine *edu_dma_co;
+Coroutine *edu_msi_co;
 
 static bool edu_msi_enabled(EduState *edu)
 {
@@ -94,11 +96,31 @@ static void edu_raise_irq(EduState *edu, uint32_t val)
     edu->irq_status |= val;
     if (edu->irq_status) {
         if (edu_msi_enabled(edu)) {
-            msi_notify(&edu->pdev, 0);
+            qemu_coroutine_enter(edu_msi_co);
         } else {
             pci_set_irq(&edu->pdev, 1);
         }
     }
+}
+
+
+static void coroutine_fn edu_msi_irq_co(void *opaque)
+{
+    EduState *edu = opaque;
+    MSIMessage msg;
+
+    msg = msi_get_message(&edu->pdev, 0);
+
+    rtl_lti_translate(msg.address, true,
+                      false, 8, false, 0,
+                      &edu->lti_args.lti_fe);
+
+    /* Wait for LTI response from RTL */
+    qemu_coroutine_yield();
+    msg.address = edu->lti_args.lti_resp.ppn;
+
+    /* Notify QEMU about the MSI */
+    msi_send_message(&edu->pdev, msg);
 }
 
 static void edu_lower_irq(EduState *edu, uint32_t val)
@@ -439,6 +461,7 @@ static void pci_edu_realize(PCIDevice *pdev, Error **errp)
     }
 
     edu_dma_co = qemu_coroutine_create(edu_dma_timer_coroutine, edu);
+    edu_msi_co = qemu_coroutine_create(edu_msi_irq_co, edu);
     timer_init_ms(&edu->dma_timer, QEMU_CLOCK_VIRTUAL, edu_dma_timer, edu);
 
     qemu_mutex_init(&edu->thr_mutex);

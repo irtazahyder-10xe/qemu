@@ -8,13 +8,13 @@
 #include "exec/memattrs.h"
 #include "exec/hwaddr.h"
 #include "qemu/coroutine-core.h"
-// #include "qemu/thread.h"
 
-/* QEMU Mutexes and Conditions for managing AXI4 and LTI requests */
-// extern QemuCond lti_resp_wait_cond;
-// extern QemuMutex lti_resp_mutex;
-
+/* Coroutine allows us execute DMA after LTI socket has read data available */
+/* NOTE: This works when we have only 1 edu device and might break if multiple
+ * edu devices start writing to the same socket */
 extern Coroutine *edu_dma_co;
+extern Coroutine *edu_msi_co;
+
 /**
  * @brief Default event handler for sockets used to communicate with RTL
  *

@@ -2,13 +2,10 @@
 #include "exec/memattrs.h"
 #include "system/dma.h"
 #include "chardev/char.h"
-#include "qemu/thread.h"
+#include "qemu/coroutine-core.h"
 #include "trace.h"
 
 #include "riscv_qemu_rtl_intf.h"
-
-QemuCond lti_resp_wait_cond;
-QemuMutex lti_resp_mutex;
 
 void default_rtl_protocol_event_handler(void *opaque, QEMUChrEvent event, const char id_str[5])
 {
@@ -88,15 +85,13 @@ void lti_event_handler(void *opaque, QEMUChrEvent event)
     /* Upon OPEN, send id string to QRB server */
     switch (event) {
         case CHR_EVENT_OPENED:
-            /* Initializing locks and mutexes */
-            qemu_cond_init(&lti_resp_wait_cond);
-            qemu_mutex_init(&lti_resp_mutex);
             /* Writing ID to LTI socket intf */
             qemu_chr_fe_write_all(&lti_args->lti_fe, (uint8_t *) "reqt", 4);
             break;
         default:
             break;
     }
+    /* Default doesn't work as LTI has special flow using coroutine */
     // default_rtl_protocol_event_handler(opaque, event, "reqt");
 }
 
@@ -132,7 +127,9 @@ void read_lti_response(void *opaque, const uint8_t *buf, int size)
                        lti_args->lti_resp.mrif_fields,
                        (lti_args->lti_resp.mrif_fields >> LTI_LRUSER_NPPN_OFFSET) & LTI_LRUSER_NPPN_MASK,
                        lti_args->lti_resp.mrif_fields & LTI_LRUSER_NID_MASK);
-    qemu_coroutine_enter(edu_dma_co);
+
+    qemu_coroutine_enter_if_inactive(edu_dma_co);
+    qemu_coroutine_enter_if_inactive(edu_msi_co);
 }
 
 void rtl_lti_translate(hwaddr iova, bool is_write, bool is_priv,
@@ -163,32 +160,6 @@ void rtl_lti_translate(hwaddr iova, bool is_write, bool is_priv,
         // return 0;
         return;
     }
-
-    /* Waiting for LTI response from QRB */
-    // chardev_status = qemu_chr_fe_read_all(lti_fe, (uint8_t*)&resp, sizeof(resp));
-
-    // if (chardev_status == -1) {
-    //     return 0;
-    // }
-    // switch (resp.resp) {
-    //     case LTI_RESP_SUCCESS:
-    //         resp_status = "SUCCESS";
-    //         break;
-    //     case LTI_RESP_MRIF_SUCCESS:
-    //         resp_status = "MRIF_SUCCESS";
-    //         break;
-    //     case LTI_RESP_FAULT_ABORT:
-    //         resp_status = "FAULT_ABORT";
-    //         break;
-    //     default:
-    //         resp_status = "INVALID_RESP";
-    // }
-    // trace_qrb_lti_resp(resp_status, resp.ppn, resp.mrif_fields,
-    //                         (resp.mrif_fields >> LTI_LRUSER_NPPN_OFFSET) & LTI_LRUSER_NPPN_MASK,
-    //                         resp.mrif_fields & LTI_LRUSER_NID_MASK);
-
-    // /* Translation successful, updating iotlb data structure with translated address */
-    // return resp.ppn;
 }
 
 /* AXI */
@@ -238,7 +209,7 @@ void rtl_dram_access(void *opaque, const uint8_t *buf, int size)
 
     /* Writing memory response to QRB */
     size = qemu_chr_fe_write_all(axi4_fe, (uint8_t *)&resp, sizeof(resp));
-    /* Unable to write to socket, exit thread */
+    /* Unable to write to socket */
     if (size == 0) {
         return;
     }
