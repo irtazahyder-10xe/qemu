@@ -36,6 +36,7 @@
 #include "chardev/char-fe.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/riscv/riscv_qemu_rtl_intf.h"
+#include "trace.h"
 
 #define TYPE_PCI_EDU_DEVICE "edu"
 typedef struct EduState EduState;
@@ -117,6 +118,7 @@ static void coroutine_fn edu_msi_irq_co(void *opaque)
 
     /* Wait for LTI response from RTL */
     qemu_coroutine_yield();
+    trace_edu_coroutines("MSI", msg.address, edu->lti_args.lti_resp.ppn, msg.data);
     msg.address = edu->lti_args.lti_resp.ppn;
 
     /* Notify QEMU about the MSI */
@@ -229,6 +231,8 @@ static void coroutine_fn edu_dma_timer_coroutine(void *opaque)
     qemu_coroutine_yield();
 
     translated_addr = edu->lti_args.lti_resp.ppn;
+    trace_edu_coroutines("DMA", edu_clamp_addr(edu, dma_to_pci ? edu->dma.dst : edu->dma.src),
+                         edu->lti_args.lti_resp.ppn, 0);
 
     if (EDU_DMA_DIR(edu->dma.cmd) == EDU_DMA_FROM_PCI) {
         uint64_t dst = edu->dma.dst;
