@@ -81,6 +81,7 @@ struct EduState {
     char dma_buf[DMA_SIZE];
     uint64_t dma_mask;
     lti_args_s lti_args;
+    CoMutex co_mutex;
 };
 
 /* Global co-routines used by EDU and required by read_lti_response */
@@ -120,10 +121,10 @@ static void edu_raise_irq(EduState *edu, uint32_t val)
     }
 }
 
-
 static void coroutine_fn edu_msi_irq_co(void *opaque)
 {
     EduState *edu = opaque;
+    qemu_co_mutex_lock(&edu->co_mutex);
     PCIDevice *dev = &edu->pdev;
     uint32_t vector = 0;
     uint16_t flags = pci_get_word(dev->config + msi_flags_off(dev));
@@ -152,6 +153,7 @@ static void coroutine_fn edu_msi_irq_co(void *opaque)
 
     /* Notify QEMU about the MSI */
     msi_send_message(&edu->pdev, msg);
+    qemu_co_mutex_unlock(&edu->co_mutex);
 }
 
 static void edu_lower_irq(EduState *edu, uint32_t val)
@@ -244,6 +246,7 @@ static void edu_dma_timer(void *opaque)
 static void coroutine_fn edu_dma_timer_coroutine(void *opaque)
 {
     EduState *edu = opaque;
+    qemu_co_mutex_lock(&edu->co_mutex);
     bool raise_irq = false;
     hwaddr translated_addr;
     // EDU_DMA_FROM_PCI = 0, EDU_DMA_TO_PCI = 1
@@ -283,6 +286,7 @@ static void coroutine_fn edu_dma_timer_coroutine(void *opaque)
     if (raise_irq) {
         edu_raise_irq(edu, DMA_IRQ);
     }
+    qemu_co_mutex_unlock(&edu->co_mutex);
 }
 
 
@@ -495,6 +499,7 @@ static void pci_edu_realize(PCIDevice *pdev, Error **errp)
 
     edu_dma_co = qemu_coroutine_create(edu_dma_timer_coroutine, edu);
     edu_msi_co = qemu_coroutine_create(edu_msi_irq_co, edu);
+    qemu_co_mutex_init(&edu->co_mutex );
     timer_init_ms(&edu->dma_timer, QEMU_CLOCK_VIRTUAL, edu_dma_timer, edu);
 
     qemu_mutex_init(&edu->thr_mutex);
