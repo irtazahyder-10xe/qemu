@@ -34,56 +34,21 @@
 #include "chardev/char.h"
 #include "chardev/char-fe.h"
 #include "hw/core/qdev-properties.h"
+#include "hw/misc/edu.h"
 #include "hw/riscv/riscv_qemu_rtl_intf.h"
-
-#define TYPE_PCI_EDU_DEVICE "edu"
-typedef struct EduState EduState;
-DECLARE_INSTANCE_CHECKER(EduState, EDU,
-                         TYPE_PCI_EDU_DEVICE)
-
-#define FACT_IRQ        0x00000001
-#define DMA_IRQ         0x00000100
-
-#define DMA_START       0x40000
-#define DMA_SIZE        4096
-
-struct EduState {
-    PCIDevice pdev;
-    MemoryRegion mmio;
-
-    QemuThread thread;
-    QemuMutex thr_mutex;
-    QemuCond thr_cond;
-    bool stopping;
-
-    uint32_t addr4;
-    uint32_t fact;
-#define EDU_STATUS_COMPUTING    0x01
-#define EDU_STATUS_IRQFACT      0x80
-    uint32_t status;
-
-    uint32_t irq_status;
-
-#define EDU_DMA_RUN             0x1
-#define EDU_DMA_DIR(cmd)        (((cmd) & 0x2) >> 1)
-# define EDU_DMA_FROM_PCI       0
-# define EDU_DMA_TO_PCI         1
-#define EDU_DMA_IRQ             0x4
-    struct dma_state {
-        dma_addr_t src;
-        dma_addr_t dst;
-        dma_addr_t cnt;
-        dma_addr_t cmd;
-    } dma;
-    QEMUTimer dma_timer;
-    char dma_buf[DMA_SIZE];
-    uint64_t dma_mask;
-    lti_args_s lti_args;
-};
 
 static bool edu_msi_enabled(EduState *edu)
 {
     return msi_enabled(&edu->pdev);
+}
+
+static void edu_lower_irq(EduState *edu, uint32_t val)
+{
+    edu->irq_status &= ~val;
+
+    if (!edu->irq_status && !edu_msi_enabled(edu)) {
+        pci_set_irq(&edu->pdev, 0);
+    }
 }
 
 static void edu_raise_irq(EduState *edu, uint32_t val)
@@ -98,17 +63,8 @@ static void edu_raise_irq(EduState *edu, uint32_t val)
     }
 }
 
-static void edu_lower_irq(EduState *edu, uint32_t val)
-{
-    edu->irq_status &= ~val;
-
-    if (!edu->irq_status && !edu_msi_enabled(edu)) {
-        pci_set_irq(&edu->pdev, 0);
-    }
-}
-
 static void edu_check_range(uint64_t xfer_start, uint64_t xfer_size,
-                uint64_t dma_start, uint64_t dma_size)
+                            uint64_t dma_start, uint64_t dma_size)
 {
     uint64_t xfer_end = xfer_start + xfer_size;
     uint64_t dma_end = dma_start + dma_size;
@@ -141,6 +97,40 @@ static dma_addr_t edu_clamp_addr(const EduState *edu, dma_addr_t addr)
     return res;
 }
 
+
+void edu_perform_dma(void *opaque, hwaddr dma_phys_addr)
+{
+    EduState *edu = opaque;
+    bool raise_irq;
+    // EDU_DMA_FROM_PCI = 0, EDU_DMA_TO_PCI = 1
+
+    if (!(edu->dma.cmd & EDU_DMA_RUN)) {
+        return;
+    }
+
+    if (EDU_DMA_DIR(edu->dma.cmd) == EDU_DMA_FROM_PCI) {
+        uint64_t dst = edu->dma.dst;
+        edu_check_range(dst, edu->dma.cnt, DMA_START, DMA_SIZE);
+        dst -= DMA_START;
+        pci_dma_read(&edu->pdev, dma_phys_addr, edu->dma_buf + dst, edu->dma.cnt);
+    } else {
+        uint64_t src = edu->dma.src;
+        edu_check_range(src, edu->dma.cnt, DMA_START, DMA_SIZE);
+        src -= DMA_START;
+        pci_dma_write(&edu->pdev, dma_phys_addr, edu->dma_buf + src, edu->dma.cnt);
+    }
+
+    edu->dma.cmd &= ~EDU_DMA_RUN;
+    if (edu->dma.cmd & EDU_DMA_IRQ) {
+        raise_irq = true;
+    }
+
+    if (raise_irq) {
+        edu_raise_irq(edu, DMA_IRQ);
+    }
+    return;
+}
+
 static void edu_dma_timer(void *opaque)
 {
     EduState *edu = opaque;
@@ -153,36 +143,10 @@ static void edu_dma_timer(void *opaque)
         return;
     }
 
-    rtl_lti_translate(edu_clamp_addr(edu, dma_to_pci ? edu->dma.dst : edu->dma.src),
-                      edu->dma.cmd == EDU_DMA_TO_PCI, false, 8, false, 0,
-                      &edu->lti_args.lti_fe);
-
-    qemu_mutex_lock(&lti_resp_mutex);
-    qemu_cond_wait(&lti_resp_wait_cond, &lti_resp_mutex);
-    qemu_mutex_unlock(&lti_resp_mutex);
-
-    translated_addr = edu->lti_args.lti_resp.ppn;
-
-    if (EDU_DMA_DIR(edu->dma.cmd) == EDU_DMA_FROM_PCI) {
-        uint64_t dst = edu->dma.dst;
-        edu_check_range(dst, edu->dma.cnt, DMA_START, DMA_SIZE);
-        dst -= DMA_START;
-        pci_dma_read(&edu->pdev, translated_addr, edu->dma_buf + dst, edu->dma.cnt);
-    } else {
-        uint64_t src = edu->dma.src;
-        edu_check_range(src, edu->dma.cnt, DMA_START, DMA_SIZE);
-        src -= DMA_START;
-        pci_dma_write(&edu->pdev, translated_addr, edu->dma_buf + src, edu->dma.cnt);
-    }
-
-    edu->dma.cmd &= ~EDU_DMA_RUN;
-    if (edu->dma.cmd & EDU_DMA_IRQ) {
-        raise_irq = true;
-    }
-
-    if (raise_irq) {
-        edu_raise_irq(edu, DMA_IRQ);
-    }
+    /* Send DMA request to RTL */
+    rtl_trans_reqt(edu_clamp_addr(edu, dma_to_pci ? edu->dma.dst : edu->dma.src),
+                   edu->dma.cmd == EDU_DMA_TO_PCI, false, 8, false, 0,
+                   &edu->lti_fe);
 }
 
 static void dma_rw(EduState *edu, bool write, dma_addr_t *val, dma_addr_t *dma,
@@ -400,10 +364,10 @@ static void pci_edu_realize(PCIDevice *pdev, Error **errp)
                        edu, QEMU_THREAD_JOINABLE);
 
     /* Initializing lti frontend */
-    qemu_chr_fe_init(&edu->lti_args.lti_fe, edu->lti_args.lti_chrdev, errp);
-    qemu_chr_fe_set_handlers(&edu->lti_args.lti_fe, can_read_lti_response,
+    qemu_chr_fe_init(&edu->lti_fe, edu->lti_chrdev, errp);
+    qemu_chr_fe_set_handlers(&edu->lti_fe, can_read_lti_response,
                              read_lti_response, lti_event_handler,
-                             NULL, &edu->lti_args, NULL, true);
+                             NULL, edu, NULL, true);
     memory_region_init_io(&edu->mmio, OBJECT(edu), &edu_mmio_ops, edu,
                     "edu-mmio", 1 * MiB);
     pci_register_bar(pdev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY, &edu->mmio);
@@ -435,7 +399,7 @@ static void edu_instance_init(Object *obj)
                                    &edu->dma_mask, OBJ_PROP_FLAG_READWRITE);
     // TODO: TYPE_CHARDEV -> TYPE_CHARDEV_MUX when using multiple devices
     object_property_add_link(obj, "lti_intf", TYPE_CHARDEV,
-                             (Object **)&edu->lti_args.lti_chrdev,
+                             (Object **)&edu->lti_chrdev,
                              qdev_prop_allow_set_link_before_realize,
                              0);
 }
@@ -468,4 +432,4 @@ static const TypeInfo edu_types[] = {
     }
 };
 
-DEFINE_TYPES(edu_types)
+DEFINE_TYPES(edu_types);

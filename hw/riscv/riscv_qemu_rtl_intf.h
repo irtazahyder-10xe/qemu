@@ -7,12 +7,7 @@
 #include "chardev/char-fe.h"
 #include "exec/memattrs.h"
 #include "exec/hwaddr.h"
-#include "qemu/thread.h"
-#include "qemu/typedefs.h"
 
-/* QEMU Mutexes and Conditions for managing AXI4 and LTI requests */
-extern QemuCond lti_resp_wait_cond;
-extern QemuMutex lti_resp_mutex;
 /**
  * @brief Default event handler for sockets used to communicate with RTL
  *
@@ -142,13 +137,6 @@ typedef struct {
     /* MRIF fields */
     uint64_t mrif_fields;
 } lti_LR_s;
-
-/* opaque struct passed to all lti related qemu_chr_fe_set_handlers */
-typedef struct {
-    Chardev *lti_chrdev;
-    CharFrontend lti_fe;
-    lti_LR_s lti_resp;
-} lti_args_s;
 
 /**
  * @brief Event handler for LTI socket device events
