@@ -180,7 +180,7 @@ void rtl_dram_access(void *opaque, const uint8_t *buf, int size)
     /* Thread initially waits on RTL to send memory access */
     // bytes = qemu_chr_fe_read_all(axi4_fe, (uint8_t *)&reqt, sizeof(reqt));
 
-    trace_qrb_axi4_reqt(reqt.addr,
+    trace_qrb_axi4_reqt(reqt.id, reqt.addr,
                         (reqt.is_write ? "WRITE" : "READ"),
                         reqt.bytes);
     /* Performing required dma_memory_* function based on type of request */
@@ -197,6 +197,8 @@ void rtl_dram_access(void *opaque, const uint8_t *buf, int size)
         resp.bytes = mem_status == MEMTX_OK ? reqt.bytes : 0;
     }
 
+    /* ID same as request, ID is used by RTL so returning it as it is */
+    resp.id = reqt.id;
     /** If operation successful, operation returns number of bytes read/written,
      * else it returns 0 */
     resp.resp = mem_status == MEMTX_OK ? OKAY : SLVERR;
@@ -208,5 +210,5 @@ void rtl_dram_access(void *opaque, const uint8_t *buf, int size)
     if (size == 0) {
         return;
     }
-    trace_qrb_axi4_resp(mem_status == MEMTX_OK ? "OKAY" : "SLVERR");
+    trace_qrb_axi4_resp(resp.id, mem_status == MEMTX_OK ? "OKAY" : "SLVERR");
 }

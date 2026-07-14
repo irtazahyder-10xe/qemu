@@ -35,5 +35,5 @@ qrb_lti_reqt(uint64_t id, uint64_t iova, uint32_t dev_id, bool proc_valid, uint3
 qrb_lti_resp(uint64_t id, const char *resp_status, uint64_t ppn, uint64_t mrif_fields, uint64_t mrif_ppn, uint32_t mrif_nid) "[LTI] ID 0x%"PRIx64" RESP: %s PPN: 0x%"PRIx64" LR_USER_RAW: 0x%"PRIx64" MRIF PPN: 0x%"PRIx64" MRIF NID: %d"
 
 # AXI4
-qrb_axi4_reqt(uint64_t addr, const char *op, int pte_bytes) "[AXI4] ADDR: 0x%"PRIx64" OP: %s BYTES: %d"
-qrb_axi4_resp(const char *resp) "[AXI4] RESP: %s"
+qrb_axi4_reqt(uint64_t id, uint64_t addr, const char *op, int pte_bytes) "[AXI4] ID 0x%"PRIx64" ADDR: 0x%"PRIx64" OP: %s BYTES: %d"
+qrb_axi4_resp(uint64_t id, const char *resp) "[AXI4] ID: 0x%"PRIx64" RESP: %s"

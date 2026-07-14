@@ -213,6 +213,7 @@ typedef union {
 
 /* AXI4 Request */
 typedef struct {
+    uint64_t id;    // Used by RTL
     uint64_t addr;
 
     /* InD | 1 | PnU */
@@ -225,6 +226,7 @@ typedef struct {
 
 /* AXI4 Response */
 typedef struct {
+    uint64_t id;    // Used by RTL
     axi4_access_t resp;
 
     size_t bytes;
