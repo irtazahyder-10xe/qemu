@@ -120,6 +120,7 @@ typedef enum {
 
 /* LTI Request Channel Transaction */
 typedef struct {
+    uint64_t id;
     uint64_t iova;
     uint32_t dev_id;
     uint32_t proc_id;
@@ -132,8 +133,9 @@ typedef struct {
 
 /* LTI Response Channel Transaction */
 typedef struct {
+    uint64_t id;
+    uint64_t spa;
     lti_lrresp_t resp;
-    uint64_t ppn;
     /* MRIF fields */
     uint64_t mrif_fields;
 } lti_LR_s;
@@ -145,19 +147,17 @@ typedef struct {
  * QEMU is master in LTI protocl, hence it sends the reqt (requestor) id to QRB
  * on AHB_SOCK.
  *
- * @param opaque Pointer to be casted to RISCV_IOMMU. Used to fetch frontend
+ * @param opaque Pointer to be casted to EDU device.
  * @param event  Event due to which callback triggered
- *
- * TODO: For now it is assumed the frontend is present in RISCV IOMMU. This
- *       is subjected to change and the frontend would be initialized in
- *       IO DEVICE.
+ * @param buf    Buffer with read data
+ * @param size   Size of @buffer in bytes
  */
 
 void lti_event_handler(void *opaque, QEMUChrEvent event);
 
-int can_read_lti_response(void *opaque);
+int can_read_rtl_trans_resp(void *opaque);
 
-void read_lti_response(void *opaque, const uint8_t *buf, int size);
+void read_rtl_trans_resp(void *opaque, const uint8_t *buf, int size);
 
 /**
  * @brief QEMU -> RTL IOVA translation request
@@ -173,13 +173,14 @@ void read_lti_response(void *opaque, const uint8_t *buf, int size);
  * @param proc_id       Process ID
  * @param lti_fe        Pointer to objects (type RISCV_IOMMU) frontend attribute
  *
+ * @return translation request id. This would be used to determine the response for DMA.
  * TODO: For now it is assumed the frontend is present in RISCV IOMMU. This
  *       is subjected to change and the frontend would be initialized in
  *       IO DEVICE.
  */
-void rtl_lti_translate(hwaddr iova, bool is_write, bool is_priv,
-                       uint32_t dev_id, bool proc_id_valid,
-                       uint32_t proc_id, CharFrontend *lti_fe);
+uint64_t rtl_trans_reqt(hwaddr iova, bool is_write, bool is_priv,
+                        uint32_t dev_id, bool proc_id_valid,
+                        uint32_t proc_id, CharFrontend *lti_fe);
 
 /* ============= AMBA AXI4 Protocol ============= */
 /* Maximum size of PTE fetched from memory (in bytes) */

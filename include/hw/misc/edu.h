@@ -3,6 +3,7 @@
 #include "qemu/thread.h"
 #include "qemu/timer.h"
 #include "chardev/char.h"
+#include "hw/pci/msi.h"
 
 #define TYPE_PCI_EDU_DEVICE "edu"
 typedef struct EduState EduState;
@@ -14,6 +15,19 @@ DECLARE_INSTANCE_CHECKER(EduState, EDU,
 
 #define DMA_START       0x40000
 #define DMA_SIZE        4096
+
+typedef struct {
+    dma_addr_t src;
+    dma_addr_t dst;
+    dma_addr_t cnt;
+    dma_addr_t cmd;
+} dma_state;
+
+typedef struct {
+    bool is_msi;
+    MSIMessage msi;
+    dma_state dma;
+} edu_ghash_entry_s;
 
 struct EduState {
     PCIDevice pdev;
@@ -37,17 +51,13 @@ struct EduState {
 # define EDU_DMA_FROM_PCI       0
 # define EDU_DMA_TO_PCI         1
 #define EDU_DMA_IRQ             0x4
-    struct dma_state {
-        dma_addr_t src;
-        dma_addr_t dst;
-        dma_addr_t cnt;
-        dma_addr_t cmd;
-    } dma;
+    dma_state dma;
     QEMUTimer dma_timer;
     char dma_buf[DMA_SIZE];
     uint64_t dma_mask;
     Chardev *lti_chrdev;
     CharFrontend lti_fe;
+    GHashTable *edu_state_history;
 };
 
-void edu_perform_dma(void *opaque, hwaddr dma_phys_addr);
+void edu_perform_dma(void *opaque, uint64_t id, hwaddr phys_addr);

@@ -36,10 +36,65 @@
 #include "hw/core/qdev-properties.h"
 #include "hw/misc/edu.h"
 #include "hw/riscv/riscv_qemu_rtl_intf.h"
+#include "trace.h"
 
 static bool edu_msi_enabled(EduState *edu)
 {
     return msi_enabled(&edu->pdev);
+}
+
+static inline unsigned int msi_nr_vectors(uint16_t flags)
+{
+    return 1U <<
+        ((flags & PCI_MSI_FLAGS_QSIZE) >> ctz32(PCI_MSI_FLAGS_QSIZE));
+}
+
+static inline uint8_t msi_flags_off(const PCIDevice* dev)
+{
+    return dev->msi_cap + PCI_MSI_FLAGS;
+}
+
+static inline uint8_t msi_pending_off(const PCIDevice* dev, bool msi64bit)
+{
+    return dev->msi_cap + (msi64bit ? PCI_MSI_PENDING_64 : PCI_MSI_PENDING_32);
+}
+
+static void edu_msi_trans(PCIDevice *dev, unsigned int vector)
+{
+    EduState *edu = EDU(dev);
+    uint16_t flags = pci_get_word(dev->config + msi_flags_off(dev));
+    bool msi64bit = flags & PCI_MSI_FLAGS_64BIT;
+    unsigned int nr_vectors = msi_nr_vectors(flags);
+    MSIMessage msg;
+    uint64_t id;
+
+    assert(vector < nr_vectors);
+    if (msi_is_masked(dev, vector)) {
+        assert(flags & PCI_MSI_FLAGS_MASKBIT);
+        pci_long_test_and_set_mask(
+            dev->config + msi_pending_off(dev, msi64bit), 1U << vector);
+        return;
+    }
+    msg = msi_get_message(&edu->pdev, 0);
+
+    edu_ghash_entry_s *value = malloc(sizeof(edu_ghash_entry_s));
+    memcpy(&value->msi, &msg, sizeof(MSIMessage));
+    value->is_msi = true;
+    id = rtl_trans_reqt(msg.address, true, false, 8, false, 0, &edu->lti_fe);
+    g_hash_table_insert(edu->edu_state_history, GINT_TO_POINTER(id), value);
+    trace_edu_msi(id, msg.address, msg.data);
+}
+
+static void edu_raise_irq(EduState *edu, uint32_t val)
+{
+    edu->irq_status |= val;
+    if (edu->irq_status) {
+        if (edu_msi_enabled(edu)) {
+            edu_msi_trans(&edu->pdev, 0);
+        } else {
+            pci_set_irq(&edu->pdev, 1);
+        }
+    }
 }
 
 static void edu_lower_irq(EduState *edu, uint32_t val)
@@ -48,18 +103,6 @@ static void edu_lower_irq(EduState *edu, uint32_t val)
 
     if (!edu->irq_status && !edu_msi_enabled(edu)) {
         pci_set_irq(&edu->pdev, 0);
-    }
-}
-
-static void edu_raise_irq(EduState *edu, uint32_t val)
-{
-    edu->irq_status |= val;
-    if (edu->irq_status) {
-        if (edu_msi_enabled(edu)) {
-            msi_notify(&edu->pdev, 0);
-        } else {
-            pci_set_irq(&edu->pdev, 1);
-        }
     }
 }
 
@@ -98,44 +141,48 @@ static dma_addr_t edu_clamp_addr(const EduState *edu, dma_addr_t addr)
 }
 
 
-void edu_perform_dma(void *opaque, hwaddr dma_phys_addr)
+void edu_perform_dma(void *opaque, uint64_t id, hwaddr phys_addr)
 {
     EduState *edu = opaque;
-    bool raise_irq;
-    // EDU_DMA_FROM_PCI = 0, EDU_DMA_TO_PCI = 1
-
-    if (!(edu->dma.cmd & EDU_DMA_RUN)) {
+    edu_ghash_entry_s *entry = g_hash_table_lookup(edu->edu_state_history, GINT_TO_POINTER(id));
+    if (entry == NULL) {
         return;
     }
+    // EDU_DMA_FROM_PCI = 0, EDU_DMA_TO_PCI = 1
+    bool is_write = entry->dma.cmd;
 
-    if (EDU_DMA_DIR(edu->dma.cmd) == EDU_DMA_FROM_PCI) {
-        uint64_t dst = edu->dma.dst;
-        edu_check_range(dst, edu->dma.cnt, DMA_START, DMA_SIZE);
-        dst -= DMA_START;
-        pci_dma_read(&edu->pdev, dma_phys_addr, edu->dma_buf + dst, edu->dma.cnt);
+    if (entry->is_msi) {
+        /* MSI transation */
+        msi_send_message(PCI_DEVICE(edu), entry->msi);
     } else {
-        uint64_t src = edu->dma.src;
-        edu_check_range(src, edu->dma.cnt, DMA_START, DMA_SIZE);
-        src -= DMA_START;
-        pci_dma_write(&edu->pdev, dma_phys_addr, edu->dma_buf + src, edu->dma.cnt);
-    }
+        /* DMA transaction */
+        if (!(entry->dma.cmd & EDU_DMA_RUN)) {
+            return;
+        }
 
-    edu->dma.cmd &= ~EDU_DMA_RUN;
-    if (edu->dma.cmd & EDU_DMA_IRQ) {
-        raise_irq = true;
-    }
+        if (!is_write) {
+            uint64_t dst = entry->dma.dst;
+            edu_check_range(dst, entry->dma.cnt, DMA_START, DMA_SIZE);
+            dst -= DMA_START;
+            pci_dma_read(&edu->pdev, phys_addr, edu->dma_buf + dst, entry->dma.cnt);
+        } else {
+            uint64_t src = entry->dma.src;
+            edu_check_range(src, entry->dma.cnt, DMA_START, DMA_SIZE);
+            src -= DMA_START;
+            pci_dma_write(&edu->pdev, phys_addr, edu->dma_buf + src, entry->dma.cnt);
+        }
 
-    if (raise_irq) {
-        edu_raise_irq(edu, DMA_IRQ);
+        entry->dma.cmd &= ~EDU_DMA_RUN;
+        if (entry->dma.cmd & EDU_DMA_IRQ) {
+            edu_raise_irq(edu, DMA_IRQ);
+        }
     }
-    return;
 }
 
 static void edu_dma_timer(void *opaque)
 {
     EduState *edu = opaque;
-    bool raise_irq = false;
-    hwaddr translated_addr;
+    uint64_t id;
     // EDU_DMA_FROM_PCI = 0, EDU_DMA_TO_PCI = 1
     bool dma_to_pci = EDU_DMA_DIR(edu->dma.cmd);
 
@@ -144,9 +191,15 @@ static void edu_dma_timer(void *opaque)
     }
 
     /* Send DMA request to RTL */
-    rtl_trans_reqt(edu_clamp_addr(edu, dma_to_pci ? edu->dma.dst : edu->dma.src),
-                   edu->dma.cmd == EDU_DMA_TO_PCI, false, 8, false, 0,
-                   &edu->lti_fe);
+    edu_ghash_entry_s *value = malloc(sizeof(edu_ghash_entry_s));
+    memcpy(&value->dma, &edu->dma, sizeof(dma_state));
+    value->is_msi = false;
+    id = rtl_trans_reqt(edu_clamp_addr(edu, dma_to_pci ? edu->dma.dst : edu->dma.src),
+                        edu->dma.cmd == EDU_DMA_TO_PCI, false, 8, false, 0,
+                        &edu->lti_fe);
+    g_hash_table_insert(edu->edu_state_history, GINT_TO_POINTER(id), value);
+    trace_edu_dma(id, edu_clamp_addr(edu, dma_to_pci ? edu->dma.dst : edu->dma.src),
+                  edu->dma.cmd == EDU_DMA_TO_PCI ? "WRITE" : "READ");
 }
 
 static void dma_rw(EduState *edu, bool write, dma_addr_t *val, dma_addr_t *dma,
@@ -365,12 +418,13 @@ static void pci_edu_realize(PCIDevice *pdev, Error **errp)
 
     /* Initializing lti frontend */
     qemu_chr_fe_init(&edu->lti_fe, edu->lti_chrdev, errp);
-    qemu_chr_fe_set_handlers(&edu->lti_fe, can_read_lti_response,
-                             read_lti_response, lti_event_handler,
+    qemu_chr_fe_set_handlers(&edu->lti_fe, can_read_rtl_trans_resp,
+                             read_rtl_trans_resp, lti_event_handler,
                              NULL, edu, NULL, true);
     memory_region_init_io(&edu->mmio, OBJECT(edu), &edu_mmio_ops, edu,
                     "edu-mmio", 1 * MiB);
     pci_register_bar(pdev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY, &edu->mmio);
+    edu->edu_state_history = g_hash_table_new_full(NULL, NULL, NULL, free);
 }
 
 static void pci_edu_uninit(PCIDevice *pdev)

@@ -82,7 +82,7 @@ MemTxResult rtl_mmio_rmw(hwaddr addr, bool is_write, bool is_8bytes,
 
 void lti_event_handler(void *opaque, QEMUChrEvent event)
 {
-    EDUState *edu = opaque;
+    EduState *edu = opaque;
     /* Upon OPEN, send id string to QRB server */
     switch (event) {
         case CHR_EVENT_OPENED:
@@ -95,18 +95,16 @@ void lti_event_handler(void *opaque, QEMUChrEvent event)
     // default_rtl_protocol_event_handler(opaque, event, "reqt");
 }
 
-int can_read_lti_response(void *opaque)
+int can_read_rtl_trans_resp(void *opaque)
 {
-    // Both request and response sizes are 24 bytes, see if we need to add a
-    // check to see if we have request or response
     return sizeof(lti_LR_s);
 }
 
-void rtl_trans_resp(void *opaque, const uint8_t *buf, int size)
+void read_rtl_trans_resp(void *opaque, const uint8_t *buf, int size)
 {
     const char *resp_status;
     lti_LR_s resp;
-    EDUState *edu = opaque;
+    EduState *edu = opaque;
 
     assert(size == sizeof(lti_LR_s));
     memcpy(&resp, buf, size);
@@ -124,18 +122,23 @@ void rtl_trans_resp(void *opaque, const uint8_t *buf, int size)
         default:
             resp_status = "INVALID_RESP";
     }
-    trace_qrb_lti_resp(resp_status, resp.ppn,
+    trace_qrb_lti_resp(resp.id, resp_status, resp.spa,
                        resp.mrif_fields,
                        (resp.mrif_fields >> LTI_LRUSER_NPPN_OFFSET) & LTI_LRUSER_NPPN_MASK,
                        resp.mrif_fields & LTI_LRUSER_NID_MASK);
-    edu_perform_dma(edu, resp.ppn);
+    edu_perform_dma(edu, resp.id, resp.spa);
 }
 
-void rtl_trans_reqt(hwaddr iova, bool is_write, bool is_priv, uint32_t dev_id,
-                    bool proc_id_valid, uint32_t proc_id, CharFrontend *lti_fe)
+uint64_t rtl_trans_reqt(hwaddr iova, bool is_write, bool is_priv,
+                        uint32_t dev_id, bool proc_id_valid,
+                        uint32_t proc_id, CharFrontend *lti_fe)
 {
+    /* Static ID assigned to every function caller to differentiate between
+     * responses */
+    static uint64_t lti_id = 0;
     lti_LA_s req;
 
+    req.id = lti_id;
     req.iova = iova;
     req.dev_id = dev_id;
     req.is_proc_valid = proc_id_valid;
@@ -144,14 +147,14 @@ void rtl_trans_reqt(hwaddr iova, bool is_write, bool is_priv, uint32_t dev_id,
     req.is_priv = is_priv;
     req.is_write = is_write;
 
-    /* TODO: Add appropriate error handling
-     * TODO: Update hard coded string when ATST flow supported */
-    trace_qrb_lti_reqt(req.iova, req.dev_id, req.is_proc_valid, req.proc_id,
-                       "NO_STALL", req.is_priv, req.is_write);
+    /* Breker has no ATS tests so flow always NO_STALL */
+    trace_qrb_lti_reqt(req.id, req.iova, req.dev_id, req.is_proc_valid,
+                       req.proc_id, "NO_STALL", req.is_priv, req.is_write);
 
     /* Sending LTI request to QRB */
     /* TODO: Check for write fails */
     qemu_chr_fe_write_all(lti_fe, (uint8_t *)&req, sizeof(req));
+    return lti_id++;
 }
 
 /* AXI */
