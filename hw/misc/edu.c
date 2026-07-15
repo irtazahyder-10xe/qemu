@@ -149,6 +149,13 @@ void edu_perform_dma(void *opaque, uint64_t id, hwaddr phys_addr)
         return;
     }
 
+    trace_edu_perform_dma_ghash_entry(entry->is_msi ? "MSI" : "DMA",
+                                      entry->dma.src,
+                                      entry->dma.dst,
+                                      entry->dma.cnt,
+                                      entry->dma.cmd,
+                                      entry->msi.address,
+                                      entry->msi.data);
     if (entry->is_msi) {
         /* MSI transation */
         msi_send_message(PCI_DEVICE(edu), entry->msi);
@@ -207,6 +214,13 @@ static void edu_dma_timer(void *opaque)
     g_hash_table_insert(edu->edu_state_history, GINT_TO_POINTER(id), value);
     trace_edu_dma(id, edu_clamp_addr(edu, dma_to_pci ? edu->dma.dst : edu->dma.src),
                   edu->dma.cmd == EDU_DMA_TO_PCI ? "WRITE" : "READ");
+    trace_edu_ghash_entry(value->is_msi ? "MSI" : "DMA",
+                          value->dma.src,
+                          value->dma.dst,
+                          value->dma.cnt,
+                          value->dma.cmd,
+                          value->msi.address,
+                          value->msi.data);
 }
 
 static void dma_rw(EduState *edu, bool write, dma_addr_t *val, dma_addr_t *dma,

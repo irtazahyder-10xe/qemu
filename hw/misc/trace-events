@@ -421,3 +421,5 @@ iommu_testdev_dma_armed(bool armed) "armed=%d"
 # custom edu.c
 edu_msi(uint64_t id, uint64_t addr, uint32_t data) "[MSI] ID: 0x%"PRIx64" ADDR: 0x%"PRIx64" DATA: 0%"PRIu32
 edu_dma(uint64_t id, uint64_t addr, const char *op) "[DMA] ID: 0x%"PRIx64" ADDR: 0x%"PRIx64" OPERATION: %s"
+edu_perform_dma_ghash_entry(const char *msi, int src, int dst, int cnt, int cmd, uint64_t addr, uint32_t data) "GHASH %s: dma.src 0x%x dma.dst 0x%x dma.cnt 0x%x dma.cmd 0x%x msi.addr 0x%"PRIx64" msi.data %"PRIu32
+edu_ghash_entry(const char *msi, int src, int dst, int cnt, int cmd, uint64_t addr, uint32_t data) "GHASH %s: dma.src 0x%x dma.dst 0x%x dma.cnt 0x%x dma.cmd 0x%x msi.addr 0x%"PRIx64" msi.data %"PRIu32
