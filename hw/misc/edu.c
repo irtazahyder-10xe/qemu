@@ -148,19 +148,23 @@ void edu_perform_dma(void *opaque, uint64_t id, hwaddr phys_addr)
     if (entry == NULL) {
         return;
     }
-    // EDU_DMA_FROM_PCI = 0, EDU_DMA_TO_PCI = 1
-    bool is_write = entry->dma.cmd;
 
     if (entry->is_msi) {
         /* MSI transation */
         msi_send_message(PCI_DEVICE(edu), entry->msi);
+        goto cleanup;
     } else {
         /* DMA transaction */
         if (!(entry->dma.cmd & EDU_DMA_RUN)) {
-            return;
+            /**
+             * If LTI response received but EDU unable to perform DMA,
+             * remove request from DMA history
+             */
+            goto cleanup;
         }
 
-        if (!is_write) {
+        // EDU_DMA_FROM_PCI = 0, EDU_DMA_TO_PCI = 1
+        if (EDU_DMA_DIR(entry->dma.cmd) == EDU_DMA_FROM_PCI) {
             uint64_t dst = entry->dma.dst;
             edu_check_range(dst, entry->dma.cnt, DMA_START, DMA_SIZE);
             dst -= DMA_START;
@@ -177,6 +181,9 @@ void edu_perform_dma(void *opaque, uint64_t id, hwaddr phys_addr)
             edu_raise_irq(edu, DMA_IRQ);
         }
     }
+cleanup:
+    /* Removing entry from hashtable */
+    g_hash_table_remove(edu->edu_state_history, GINT_TO_POINTER(id));
 }
 
 static void edu_dma_timer(void *opaque)
@@ -444,6 +451,12 @@ static void pci_edu_uninit(PCIDevice *pdev)
     msi_uninit(pdev);
 }
 
+static void edu_instance_finalize(Object *obj)
+{
+    EduState *edu = EDU(obj);
+    g_hash_table_destroy(edu->edu_state_history);
+}
+
 static void edu_instance_init(Object *obj)
 {
     EduState *edu = EDU(obj);
@@ -478,6 +491,7 @@ static const TypeInfo edu_types[] = {
         .parent        = TYPE_PCI_DEVICE,
         .instance_size = sizeof(EduState),
         .instance_init = edu_instance_init,
+        .instance_finalize = edu_instance_finalize,
         .class_init    = edu_class_init,
         .interfaces    = (const InterfaceInfo[]) {
             { INTERFACE_CONVENTIONAL_PCI_DEVICE },
