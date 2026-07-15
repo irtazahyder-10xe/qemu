@@ -183,7 +183,7 @@ void edu_perform_dma(void *opaque, uint64_t id, hwaddr phys_addr)
             pci_dma_write(&edu->pdev, phys_addr, edu->dma_buf + src, entry->dma.cnt);
         }
 
-        entry->dma.cmd &= ~EDU_DMA_RUN;
+        edu->dma.cmd &= ~EDU_DMA_RUN;
         if (entry->dma.cmd & EDU_DMA_IRQ) {
             edu_raise_irq(edu, DMA_IRQ);
         }
