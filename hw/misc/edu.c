@@ -157,7 +157,8 @@ void edu_perform_dma(void *opaque, uint64_t id, hwaddr phys_addr)
                                       entry->msi.address,
                                       entry->msi.data);
     if (entry->is_msi) {
-        /* MSI transation */
+        /* MSI translation */
+        entry->msi.address = phys_addr;
         msi_send_message(PCI_DEVICE(edu), entry->msi);
         goto cleanup;
     } else {
