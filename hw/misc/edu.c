@@ -141,10 +141,11 @@ static dma_addr_t edu_clamp_addr(const EduState *edu, dma_addr_t addr)
 }
 
 
-void edu_perform_dma(void *opaque, uint64_t id, hwaddr phys_addr)
+void edu_perform_dma(void *opaque, lti_LR_s resp)
 {
     EduState *edu = opaque;
-    edu_ghash_entry_s *entry = g_hash_table_lookup(edu->edu_state_history, GINT_TO_POINTER(id));
+    edu_ghash_entry_s *entry = g_hash_table_lookup(edu->edu_state_history,
+                                                   GINT_TO_POINTER(resp.id));
     if (entry == NULL) {
         return;
     }
@@ -156,9 +157,17 @@ void edu_perform_dma(void *opaque, uint64_t id, hwaddr phys_addr)
                                       entry->dma.cmd,
                                       entry->msi.address,
                                       entry->msi.data);
+
+    /* Deasserting EDU DMA bit and consuming LTI request if ABORT received */
+    if (resp.resp == LTI_RESP_FAULT_ABORT)
+    {
+        edu->dma.cmd = ~EDU_DMA_RUN;
+        goto cleanup;
+    }
+
     if (entry->is_msi) {
         /* MSI translation */
-        entry->msi.address = phys_addr;
+        entry->msi.address = resp.spa;
         msi_send_message(PCI_DEVICE(edu), entry->msi);
         goto cleanup;
     } else {
@@ -176,12 +185,12 @@ void edu_perform_dma(void *opaque, uint64_t id, hwaddr phys_addr)
             uint64_t dst = entry->dma.dst;
             edu_check_range(dst, entry->dma.cnt, DMA_START, DMA_SIZE);
             dst -= DMA_START;
-            pci_dma_read(&edu->pdev, phys_addr, edu->dma_buf + dst, entry->dma.cnt);
+            pci_dma_read(&edu->pdev, resp.spa, edu->dma_buf + dst, entry->dma.cnt);
         } else {
             uint64_t src = entry->dma.src;
             edu_check_range(src, entry->dma.cnt, DMA_START, DMA_SIZE);
             src -= DMA_START;
-            pci_dma_write(&edu->pdev, phys_addr, edu->dma_buf + src, entry->dma.cnt);
+            pci_dma_write(&edu->pdev, resp.spa, edu->dma_buf + src, entry->dma.cnt);
         }
 
         edu->dma.cmd &= ~EDU_DMA_RUN;
@@ -191,7 +200,7 @@ void edu_perform_dma(void *opaque, uint64_t id, hwaddr phys_addr)
     }
 cleanup:
     /* Removing entry from hashtable */
-    g_hash_table_remove(edu->edu_state_history, GINT_TO_POINTER(id));
+    g_hash_table_remove(edu->edu_state_history, GINT_TO_POINTER(resp.id));
 }
 
 static void edu_dma_timer(void *opaque)

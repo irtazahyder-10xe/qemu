@@ -126,7 +126,7 @@ void read_rtl_trans_resp(void *opaque, const uint8_t *buf, int size)
                        resp.mrif_fields,
                        (resp.mrif_fields >> LTI_LRUSER_NPPN_OFFSET) & LTI_LRUSER_NPPN_MASK,
                        resp.mrif_fields & LTI_LRUSER_NID_MASK);
-    edu_perform_dma(edu, resp.id, resp.spa);
+    edu_perform_dma(edu, resp);
 }
 
 uint64_t rtl_trans_reqt(hwaddr iova, bool is_write, bool is_priv,

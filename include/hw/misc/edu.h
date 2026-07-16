@@ -4,6 +4,7 @@
 #include "qemu/timer.h"
 #include "chardev/char.h"
 #include "hw/pci/msi.h"
+#include "hw/riscv/riscv_qemu_rtl_intf.h"
 
 #define TYPE_PCI_EDU_DEVICE "edu"
 typedef struct EduState EduState;
@@ -60,4 +61,4 @@ struct EduState {
     GHashTable *edu_state_history;
 };
 
-void edu_perform_dma(void *opaque, uint64_t id, hwaddr phys_addr);
+void edu_perform_dma(void *opaque, lti_LR_s resp);
