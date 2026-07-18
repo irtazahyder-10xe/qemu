@@ -184,17 +184,37 @@ void rtl_dram_access(void *opaque, const uint8_t *buf, int size)
                         (reqt.is_write ? "WRITE" : "READ"),
                         reqt.bytes);
     /* Performing required dma_memory_* function based on type of request */
-    if (reqt.is_write) {
+    mem_status = dma_memory_read(&address_space_memory, reqt.addr,
+                                 resp.pte, reqt.bytes,
+                                 MEMTXATTRS_UNSPECIFIED);
+    if (reqt.is_write && mem_status == MEMTX_OK) {
+        /* Apply strobe mask on PTE */
+        for (uint8_t i = 0; i < reqt.bytes; i++) {
+            if (reqt.bytes < 8 && reqt.write_strb[0] == ((1 << reqt.bytes) - 1)) {
+                /* Optimization if we have a write of less than a byte
+                 * and strobe has 1's in [0:bytes-1] */
+                break;
+            } else if (reqt.write_strb[i] == 0xFF) {
+                /* Optimization to skip processing double words if byte
+                 * contains all 1s */
+                i += 7;
+                continue;
+            }
+
+            /**
+             * Checking strobe bit for ith byte
+             * If it is zero, keeping byte same as it was originally
+             * stored in memory
+             */
+            if (!(reqt.write_strb[i >> 3] & (1 << (i % 8)))) {
+                reqt.write_data[i] = resp.pte[i];
+            }
+        }
         mem_status = dma_memory_write(&address_space_memory, reqt.addr,
                                       reqt.write_data, reqt.bytes,
                                       MEMTXATTRS_UNSPECIFIED);
         /* Reponse PTE is all zeros if write operation */
         bzero(resp.pte, sizeof(resp.pte));
-    } else {
-        mem_status = dma_memory_read(&address_space_memory, reqt.addr,
-                                     resp.pte, reqt.bytes,
-                                     MEMTXATTRS_UNSPECIFIED);
-        resp.bytes = mem_status == MEMTX_OK ? reqt.bytes : 0;
     }
 
     /* ID same as request, ID is used by RTL so returning it as it is */

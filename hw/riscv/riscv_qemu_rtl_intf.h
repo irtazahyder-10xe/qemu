@@ -222,6 +222,8 @@ typedef struct {
 
     size_t bytes;
     uint8_t write_data[MAX_PTE_BYTES];
+    /* For every byte in write_data, we require a strobe value */
+    uint8_t write_strb[MAX_PTE_BYTES >> 3];
 } axi4_reqt_s;
 
 /* AXI4 Response */
