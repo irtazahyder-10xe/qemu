@@ -114,7 +114,6 @@ typedef enum {
 /* LTI Resp: Response can be one of Succes, MRIF Success or FAULT_ABORT */
 typedef enum {
     LTI_RESP_SUCCESS = 0,
-    LTI_RESP_MRIF_SUCCESS = 3,
     LTI_RESP_FAULT_ABORT = 4
 } lti_lrresp_t;
 
@@ -131,13 +130,27 @@ typedef struct {
     bool is_write;
 } lti_LA_s;
 
+#define MRIF_NID_MASK       ((1UL << 10) - 1)
+#define MRIF_NPPN_MASK      ((1UL << 44) - 1)
+#define MRIF_NPPN_OFFSET    11
+#define MRIF_ADDR_MASK      ((1UL << 4) - 1)
+#define MRIF_ADDR_OFFSET    55
+#define MRIF_VALID          (1UL << 59)
 /* LTI Response Channel Transaction */
 typedef struct {
     uint64_t id;
     uint64_t spa;
     lti_lrresp_t resp;
-    /* MRIF fields */
-    uint64_t mrif_fields;
+    /* MRIF fields
+     * NID: [10:0]
+     * NPPN: [54:11]
+     * MRIF Address: mrif_fields[58:55] concat spa
+     * isMRIF: [59]
+     */
+    uint64_t mrif_fields; // 60 bits field
+    /* QoS */
+    uint16_t rcid; // 12 bit fields
+    uint16_t mcid; // 12 bit fields
 } lti_LR_s;
 
 /**

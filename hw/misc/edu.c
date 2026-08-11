@@ -33,6 +33,7 @@
 #include "qemu/main-loop.h" /* iothread mutex */
 #include "chardev/char.h"
 #include "chardev/char-fe.h"
+#include "system/address-spaces.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/misc/edu.h"
 #include "hw/riscv/riscv_qemu_rtl_intf.h"
@@ -144,6 +145,7 @@ static dma_addr_t edu_clamp_addr(const EduState *edu, dma_addr_t addr)
 void edu_perform_dma(void *opaque, lti_LR_s resp)
 {
     EduState *edu = opaque;
+    MemTxResult result;
     edu_ghash_entry_s *entry = g_hash_table_lookup(edu->edu_state_history,
                                                    GINT_TO_POINTER(resp.id));
     if (entry == NULL) {
@@ -169,7 +171,40 @@ void edu_perform_dma(void *opaque, lti_LR_s resp)
 
     if (entry->is_msi) {
         /* MSI translation */
-        entry->msi.address = resp.spa;
+        if (!(resp.mrif_fields & MRIF_VALID)) {
+            /* MSI */
+            entry->msi.address = resp.spa;
+        } else {
+            /* MRIF */
+            /* MRIF Address = concat(mrif_fields[58:55], spa) */
+            uint64_t mrif_addr = (resp.mrif_fields >> MRIF_ADDR_OFFSET) & MRIF_ADDR_MASK;
+            mrif_addr = (mrif_addr << 52) | resp.spa;
+
+            /* We generally expect the IO Bridge to updated the MRIF but for
+             * now EDU would do it instead */
+            uint64_t mrif_eip = address_space_ldq_le(&address_space_memory,
+                                                     mrif_addr + 16 * (entry->msi.data / 64),
+                                                     MEMTXATTRS_UNSPECIFIED,
+                                                     &result);
+            /* Failed to read MRIF, discard trasaction */
+            if (result != MEMTX_OK) {
+                goto cleanup;
+            }
+            mrif_eip |= (1 << (entry->msi.data % 64));
+            address_space_stq_le(&address_space_memory,
+                                 mrif_addr + 16 * (entry->msi.data / 64),
+                                 mrif_eip, MEMTXATTRS_UNSPECIFIED, &result);
+            /* Failed to write in MRIF, discard transaction */
+            if (result != MEMTX_OK) {
+                goto cleanup;
+            }
+
+            /* Setting up NMSI */
+            entry->msi.address = (resp.mrif_fields >> MRIF_NPPN_OFFSET) & MRIF_NPPN_MASK;
+            entry->msi.address <<= 12;
+            entry->msi.data = resp.mrif_fields & MRIF_NID_MASK;
+        }
+
         msi_send_message(PCI_DEVICE(edu), entry->msi);
     } else {
         /* DMA transaction */
@@ -454,7 +489,7 @@ static void pci_edu_realize(PCIDevice *pdev, Error **errp)
                              read_rtl_trans_resp, lti_event_handler,
                              NULL, edu, NULL, true);
     memory_region_init_io(&edu->mmio, OBJECT(edu), &edu_mmio_ops, edu,
-                    "edu-mmio", 1 * MiB);
+                          "edu-mmio", 1 * MiB);
     pci_register_bar(pdev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY, &edu->mmio);
     edu->edu_state_history = g_hash_table_new_full(NULL, NULL, NULL, free);
 }

@@ -113,14 +113,15 @@ void read_rtl_trans_resp(void *opaque, const uint8_t *buf, int size)
         case LTI_RESP_SUCCESS:
             resp_status = "SUCCESS";
             break;
-        case LTI_RESP_MRIF_SUCCESS:
-            resp_status = "MRIF_SUCCESS";
-            break;
         case LTI_RESP_FAULT_ABORT:
             resp_status = "FAULT_ABORT";
             break;
         default:
-            resp_status = "INVALID_RESP";
+            if (resp.mrif_fields & (1ULL << 59)) {
+                resp_status = "MRIF_SUCCESS";
+            } else {
+                resp_status = "INVALID_RESP";
+            }
     }
     trace_qrb_lti_resp(resp.id, resp_status, resp.spa,
                        resp.mrif_fields,
