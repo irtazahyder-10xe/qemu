@@ -59,6 +59,18 @@ struct EduState {
     Chardev *lti_chrdev;
     CharFrontend lti_fe;
     GHashTable *edu_state_history;
+
+#define EDU_PROC_OFFSET         0x100
+#define EDU_PROC_VALID          1
+#define EDU_PROC_PRIV           2
+#define EDU_PROC_EXEC           4
+#define EDU_PROC_RSRV_MASK      ((1UL << 9) - 1)
+#define EDU_PROC_RSRV_OFFSET    3
+#define EDU_PROC_PASID_MASK     ((1UL << 20) - 1)
+#define EDU_PROC_PASID_OFFSET   2
+    /* | Proc ID | RSRV | E | P | V | */
+    /* 31        12     3   2   1   0 */
+    uint32_t process_info;
 };
 
 void edu_perform_dma(void *opaque, lti_LR_s resp);
