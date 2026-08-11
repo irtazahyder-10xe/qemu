@@ -60,7 +60,8 @@ struct EduState {
     CharFrontend lti_fe;
     GHashTable *edu_state_history;
 
-#define EDU_PROC_OFFSET         0x100
+#define EDU_PROC_DMA_OFFSET     0x100
+#define EDU_PROC_MSI_OFFSET     0x104
 #define EDU_PROC_VALID          1
 #define EDU_PROC_PRIV           2
 #define EDU_PROC_EXEC           4
@@ -70,7 +71,8 @@ struct EduState {
 #define EDU_PROC_PASID_OFFSET   2
     /* | Proc ID | RSRV | E | P | V | */
     /* 31        12     3   2   1   0 */
-    uint32_t process_info;
+    uint32_t process_info_dma;
+    uint32_t process_info_msi;
 };
 
 void edu_perform_dma(void *opaque, lti_LR_s resp);

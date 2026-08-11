@@ -79,14 +79,14 @@ static void edu_msi_trans(PCIDevice *dev, unsigned int vector)
     msg = msi_get_message(&edu->pdev, 0);
 
     edu_ghash_entry_s *value = calloc(1, sizeof(edu_ghash_entry_s));
-    bool priv = (edu->process_info & EDU_PROC_VALID) ?
-                !!(edu->process_info & EDU_PROC_PRIV) : 0;
+    bool priv = (edu->process_info_msi & EDU_PROC_VALID) ?
+                !!(edu->process_info_msi & EDU_PROC_PRIV) : 0;
 
     memcpy(&value->msi, &msg, sizeof(MSIMessage));
     value->is_msi = true;
     id = rtl_trans_reqt(msg.address, true, priv, 8,
-                        !!(edu->process_info & EDU_PROC_VALID),
-                        (edu->process_info >> EDU_PROC_PASID_OFFSET) & EDU_PROC_PASID_MASK,
+                        !!(edu->process_info_msi & EDU_PROC_VALID),
+                        (edu->process_info_msi >> EDU_PROC_PASID_OFFSET) & EDU_PROC_PASID_MASK,
                         &edu->lti_fe);
     g_hash_table_insert(edu->edu_state_history, GINT_TO_POINTER(id), value);
     trace_edu_msi(id, msg.address, msg.data);
@@ -257,16 +257,16 @@ static void edu_dma_timer(void *opaque)
     }
 
     /* Send DMA request to RTL */
-    bool priv = (edu->process_info & EDU_PROC_VALID) ?
-                !!(edu->process_info & EDU_PROC_PRIV) : 0;
+    bool priv = (edu->process_info_dma & EDU_PROC_VALID) ?
+                !!(edu->process_info_dma & EDU_PROC_PRIV) : 0;
 
     edu_ghash_entry_s *value = calloc(1, sizeof(edu_ghash_entry_s));
     memcpy(&value->dma, &edu->dma, sizeof(dma_state));
     value->is_msi = false;
     id = rtl_trans_reqt(edu_clamp_addr(edu, dma_to_pci ? edu->dma.dst : edu->dma.src),
                         EDU_DMA_DIR(edu->dma.cmd) == EDU_DMA_TO_PCI,
-                        priv, 8, !!(edu->process_info & EDU_PROC_VALID),
-                        (edu->process_info >> EDU_PROC_PASID_OFFSET) & EDU_PROC_PASID_MASK,
+                        priv, 8, !!(edu->process_info_dma & EDU_PROC_VALID),
+                        (edu->process_info_dma >> EDU_PROC_PASID_OFFSET) & EDU_PROC_PASID_MASK,
                         &edu->lti_fe);
     g_hash_table_insert(edu->edu_state_history, GINT_TO_POINTER(id), value);
     trace_edu_dma(id, edu_clamp_addr(edu, dma_to_pci ? edu->dma.dst : edu->dma.src),
@@ -341,8 +341,11 @@ static uint64_t edu_mmio_read(void *opaque, hwaddr addr, unsigned size)
     case 0x98:
         dma_rw(edu, false, &val, &edu->dma.cmd, false);
         break;
-    case 0x100:
-        val = edu->process_info;
+    case EDU_PROC_DMA_OFFSET:
+        val = edu->process_info_dma;
+        break;
+    case EDU_PROC_MSI_OFFSET:
+        val = edu->process_info_msi;
         break;
     }
 
@@ -409,8 +412,11 @@ static void edu_mmio_write(void *opaque, hwaddr addr, uint64_t val,
         }
         dma_rw(edu, true, &val, &edu->dma.cmd, true);
         break;
-    case 0x100:
-        edu->process_info = val & ~(EDU_PROC_RSRV_MASK << EDU_PROC_RSRV_OFFSET);
+    case EDU_PROC_DMA_OFFSET:
+        edu->process_info_dma = val & ~(EDU_PROC_RSRV_MASK << EDU_PROC_RSRV_OFFSET);
+        break;
+    case EDU_PROC_MSI_OFFSET:
+        edu->process_info_msi = val & ~(EDU_PROC_RSRV_MASK << EDU_PROC_RSRV_OFFSET);
         break;
     }
 }
