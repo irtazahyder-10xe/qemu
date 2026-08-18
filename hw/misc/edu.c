@@ -219,11 +219,11 @@ static void edu_dma_timer(void *opaque)
     memcpy(&value->dma, &edu->dma, sizeof(dma_state));
     value->is_msi = false;
     id = rtl_trans_reqt(edu_clamp_addr(edu, dma_to_pci ? edu->dma.dst : edu->dma.src),
-                        edu->dma.cmd == EDU_DMA_TO_PCI, false, 8, false, 0,
+                        EDU_DMA_DIR(edu->dma.cmd) == EDU_DMA_TO_PCI, false, 8, false, 0,
                         &edu->lti_fe);
     g_hash_table_insert(edu->edu_state_history, GINT_TO_POINTER(id), value);
     trace_edu_dma(id, edu_clamp_addr(edu, dma_to_pci ? edu->dma.dst : edu->dma.src),
-                  edu->dma.cmd == EDU_DMA_TO_PCI ? "WRITE" : "READ");
+                  EDU_DMA_DIR(edu->dma.cmd) == EDU_DMA_TO_PCI ? "WRITE" : "READ");
     trace_edu_ghash_entry(value->is_msi ? "MSI" : "DMA",
                           value->dma.src,
                           value->dma.dst,
