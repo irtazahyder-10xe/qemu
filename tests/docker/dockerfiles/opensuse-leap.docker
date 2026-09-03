@@ -7,7 +7,7 @@
 FROM registry.opensuse.org/opensuse/leap:16.0
 
 RUN zypper update -y && \
-    zypper install -y \
+    zypper install -y --allow-downgrade \
            Mesa-devel \
            alsa-lib-devel \
            bash \
@@ -34,7 +34,6 @@ RUN zypper update -y && \
            glib2-devel \
            glibc-locale \
            glibc-static \
-           glusterfs-devel \
            gtk-vnc-devel \
            gtk3-devel \
            hostname \
@@ -94,8 +93,6 @@ RUN zypper update -y && \
            pcre2-devel-static \
            pipewire-devel \
            pkgconfig \
-           python3-Pillow \
-           python3-PyYAML \
            python3-Sphinx \
            python3-base \
            python3-numpy \
@@ -150,4 +147,4 @@ ARG UID
 RUN if [ "${USER}" ]; then \
   id ${USER} 2>/dev/null || useradd -u ${UID} -U ${USER}; fi
 
-ENV ENABLE_RUST 1
+ENV ENABLE_RUST=1

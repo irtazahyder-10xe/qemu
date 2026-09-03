@@ -414,7 +414,7 @@
 
 #define fGEN_TCG_STORE(SHORTCODE) \
     do { \
-        TCGv HALF G_GNUC_UNUSED = tcg_temp_new(); \
+        TCGv tmp_half G_GNUC_UNUSED = tcg_temp_new(); \
         TCGv BYTE G_GNUC_UNUSED = tcg_temp_new(); \
         SHORTCODE; \
     } while (0)
@@ -422,7 +422,7 @@
 #define fGEN_TCG_STORE_pcr(SHIFT, STORE) \
     do { \
         TCGv ireg = tcg_temp_new(); \
-        TCGv HALF G_GNUC_UNUSED = tcg_temp_new(); \
+        TCGv tmp_half G_GNUC_UNUSED = tcg_temp_new(); \
         TCGv BYTE G_GNUC_UNUSED = tcg_temp_new(); \
         tcg_gen_mov_tl(EA, RxV); \
         gen_read_ireg(ireg, MuV, SHIFT); \
@@ -488,6 +488,7 @@
 
 /* dczeroa clears the 32 byte cache line at the address given */
 #define fGEN_TCG_Y2_dczeroa(SHORTCODE) SHORTCODE
+#define fGEN_TCG_Y2_dczeroa_nt(SHORTCODE) SHORTCODE
 
 /* In linux-user mode, these are not modelled, suppress compiler warning */
 #define fGEN_TCG_Y2_dcinva(SHORTCODE) \
@@ -496,8 +497,17 @@
     do { RsV = RsV; } while (0)
 #define fGEN_TCG_Y2_dccleana(SHORTCODE) \
     do { RsV = RsV; } while (0)
+
+#ifdef CONFIG_USER_ONLY
+#define fGEN_TCG_Y2_icinva(SHORTCODE) \
+    gen_helper_insn_cache_op(tcg_env, RsV, \
+                             tcg_constant_tl(insn->slot), \
+                             tcg_constant_tl(ctx->mem_idx), \
+                             tcg_constant_tl(ctx->pkt.pc))
+#else
 #define fGEN_TCG_Y2_icinva(SHORTCODE) \
     do { RsV = RsV; } while (0)
+#endif
 
 /*
  * allocframe(#uiV)
@@ -1112,6 +1122,9 @@
                            RdV, tcg_constant_tl(0)); \
     } while (0)
 
+#define fGEN_TCG_Y2_break(SHORTCODE)
+#define fGEN_TCG_J2_unpause(SHORTCODE)
+
 #define fGEN_TCG_J2_pause(SHORTCODE) \
     do { \
         uiV = uiV; \
@@ -1321,6 +1334,11 @@
         RsV = RsV; \
         uiV = uiV; \
     } while (0)
+#define fGEN_TCG_Y2_dcfetchbo_nt(SHORTCODE) \
+    do { \
+        RsV = RsV; \
+        uiV = uiV; \
+    } while (0)
 
 #define fGEN_TCG_L2_loadw_aq(SHORTCODE)                 SHORTCODE
 #define fGEN_TCG_L4_loadd_aq(SHORTCODE)                 SHORTCODE
@@ -1340,13 +1358,6 @@
 #define fGEN_TCG_S2_storew_rl_st_vi(SHORTCODE)          SHORTCODE
 #define fGEN_TCG_S4_stored_rl_st_vi(SHORTCODE)          SHORTCODE
 
-#define fGEN_TCG_J2_trap0(SHORTCODE) \
-    do { \
-        uiV = uiV; \
-        tcg_gen_movi_tl(hex_gpr[HEX_REG_PC], ctx->pkt->pc); \
-        TCGv excp = tcg_constant_tl(HEX_EVENT_TRAP0); \
-        gen_helper_raise_exception(tcg_env, excp); \
-    } while (0)
 #endif
 
 #define fGEN_TCG_A2_nop(SHORTCODE) do { } while (0)

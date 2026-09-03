@@ -892,6 +892,17 @@ static void sbsa_ref_instance_init(Object *obj)
     sbsa_flash_create(sms);
 }
 
+static void sbsa_ref_instance_finalize(Object *obj)
+{
+    SBSAMachineState *sms = SBSA_MACHINE(obj);
+
+    for (int i = 0; i < ARRAY_SIZE(sms->flash); i++) {
+        if (sms->flash[i] && !qdev_is_realized(DEVICE(sms->flash[i]))) {
+            object_unref(OBJECT(sms->flash[i]));
+        }
+    }
+}
+
 static void sbsa_ref_class_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
@@ -902,6 +913,8 @@ static void sbsa_ref_class_init(ObjectClass *oc, const void *data)
         ARM_CPU_TYPE_NAME("neoverse-v1"),
         ARM_CPU_TYPE_NAME("neoverse-n2"),
         ARM_CPU_TYPE_NAME("max"),
+        ARM_CPU_TYPE_NAME("max-v8"),
+        ARM_CPU_TYPE_NAME("max-v9"),
         NULL,
     };
 
@@ -930,6 +943,7 @@ static const TypeInfo sbsa_ref_info = {
     .name          = TYPE_SBSA_MACHINE,
     .parent        = TYPE_MACHINE,
     .instance_init = sbsa_ref_instance_init,
+    .instance_finalize = sbsa_ref_instance_finalize,
     .class_init    = sbsa_ref_class_init,
     .instance_size = sizeof(SBSAMachineState),
     .interfaces    = aarch64_machine_interfaces,

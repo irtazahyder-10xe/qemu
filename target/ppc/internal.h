@@ -22,7 +22,6 @@
 #include "exec/memop.h"
 #include "hw/core/registerfields.h"
 #include "exec/page-protection.h"
-#include "accel/tcg/tb-cpu-state.h"
 
 static inline bool ppc_env_is_little_endian(const CPUPPCState *env)
 {
@@ -198,13 +197,6 @@ EXTRACT_HELPER(L, 16, 2);
 EXTRACT_HELPER(WC, 21, 2);
 EXTRACT_HELPER(PL, 16, 2);
 
-/***                            Jump target decoding                       ***/
-/* Immediate address */
-static inline target_ulong LI(uint32_t opcode)
-{
-    return (opcode >> 0) & 0x03FFFFFC;
-}
-
 static inline uint32_t BD(uint32_t opcode)
 {
     return (opcode >> 0) & 0xFFFC;
@@ -326,6 +318,10 @@ static inline int ger_pack_masks(int pmsk, int ymsk, int xmsk)
     return msk;
 }
 
+#ifdef CONFIG_TCG
+#include "accel/tcg/tb-cpu-state.h"
+
 TCGTBCPUState ppc_get_tb_cpu_state(CPUState *cs);
+#endif
 
 #endif /* PPC_INTERNAL_H */

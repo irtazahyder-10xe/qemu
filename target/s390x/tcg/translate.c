@@ -31,8 +31,10 @@
 #include "qemu/osdep.h"
 #include "cpu.h"
 #include "s390x-internal.h"
-#include "tcg/tcg-op.h"
-#include "tcg/tcg-op-gvec.h"
+#define TCG_ADDRESS_BITS 64
+#include "tcg/tcg-op-common.h"
+#include "tcg/tcg-op-mem.h"
+#include "tcg/tcg-op-gvec-common.h"
 #include "qemu/log.h"
 #include "qemu/host-utils.h"
 #include "exec/helper-proto.h"
@@ -4106,7 +4108,9 @@ static DisasJumpType op_stap(DisasContext *s, DisasOps *o)
 static DisasJumpType op_stck(DisasContext *s, DisasOps *o)
 {
     gen_helper_stck(o->out, tcg_env);
+    tcg_gen_qemu_st_i64(o->out, o->addr1, get_mem_index(s), MO_BEUQ);
     /* ??? We don't implement clock states.  */
+    /* Set the CC after the store; a suppressed store must preserve it. */
     gen_op_movi_cc(s, 0);
     return DISAS_NEXT;
 }
@@ -6509,7 +6513,8 @@ void s390x_translate_code(CPUState *cs, TranslationBlock *tb,
 {
     DisasContext dc;
 
-    translator_loop(cs, tb, max_insns, pc, host_pc, &s390x_tr_ops, &dc.base);
+    translator_loop(cs, tb, max_insns, pc, host_pc, &s390x_tr_ops, &dc.base,
+                    TCG_TYPE_VA);
 }
 
 void s390x_restore_state_to_opc(CPUState *cs,

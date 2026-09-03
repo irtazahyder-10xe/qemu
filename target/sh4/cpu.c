@@ -28,6 +28,7 @@
 #include "fpu/softfloat-helpers.h"
 #include "accel/tcg/cpu-ops.h"
 #include "tcg/tcg.h"
+#include "disas/capstone.h"
 
 static void superh_cpu_set_pc(CPUState *cs, vaddr value)
 {
@@ -151,7 +152,7 @@ static void superh_cpu_reset_hold(Object *obj, ResetType type)
     set_flush_to_zero(1, &env->fp_status);
 #endif
     set_default_nan_mode(1, &env->fp_status);
-    set_snan_bit_is_one(true, &env->fp_status);
+    set_snan_rule(float_snan_bit_is_one, &env->fp_status);
     /* sign bit clear, set all frac bits other than msb */
     set_float_default_nan_pattern(0b00111111, &env->fp_status);
     /*
@@ -167,10 +168,23 @@ static void superh_cpu_reset_hold(Object *obj, ResetType type)
 static void superh_cpu_disas_set_info(const CPUState *cpu,
                                       disassemble_info *info)
 {
+    const CPUSH4State *env = cpu_env((CPUState *)cpu);
+
     info->endian = TARGET_BIG_ENDIAN ? BFD_ENDIAN_BIG
                                      : BFD_ENDIAN_LITTLE;
     info->mach = bfd_mach_sh4;
     info->print_insn = print_insn_sh;
+
+    info->cap_arch = CS_ARCH_SH;
+    info->cap_insn_unit = 2;
+    info->cap_insn_split = 2;
+    /*
+     * Possible capstone bug: the isa levels are not additive:
+     * least significant bit wins, so SH4 overrides SH4A.
+     * Work around by setting one or the other but not both.
+     */
+    info->cap_mode = CS_MODE_SHFPU
+        | (env->features & SH_FEATURE_SH4A ? CS_MODE_SH4A : CS_MODE_SH4);
 }
 
 static ObjectClass *superh_cpu_class_by_name(const char *cpu_model)
@@ -250,7 +264,7 @@ static void superh_cpu_realizefn(DeviceState *dev, Error **errp)
     SuperHCPUClass *scc = SUPERH_CPU_GET_CLASS(dev);
     Error *local_err = NULL;
 
-    cpu_exec_realizefn(cs, &local_err);
+    cpu_common_realize(cs, &local_err);
     if (local_err != NULL) {
         error_propagate(errp, local_err);
         return;
@@ -278,7 +292,7 @@ static const VMStateDescription vmstate_sh_cpu = {
 
 static const struct SysemuCPUOps sh4_sysemu_ops = {
     .has_work = superh_cpu_has_work,
-    .get_phys_page_debug = superh_cpu_get_phys_page_debug,
+    .get_phys_addr_debug = superh_cpu_get_phys_addr_debug,
 };
 #endif
 

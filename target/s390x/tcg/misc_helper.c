@@ -27,7 +27,9 @@
 #include "exec/helper-proto.h"
 #include "qemu/timer.h"
 #include "exec/cputlb.h"
-#include "accel/tcg/cpu-ldst.h"
+#include "accel/tcg/cpu-ldst-common.h"
+#include "accel/tcg/cpu-loop.h"
+#include "accel/tcg/cpu-mmu-index.h"
 #include "exec/target_page.h"
 #include "qapi/error.h"
 #include "tcg_s390x.h"
@@ -134,13 +136,30 @@ void HELPER(diag)(CPUS390XState *env, uint32_t r1, uint32_t r3, uint32_t num)
     case 0x308:
         /* ipl */
         bql_lock();
-        handle_diag_308(env, r1, r3, GETPC());
+        if (handle_diag_308(env, r1, r3, GETPC())) {
+            /* As reset is triggered by the CPU, make sure to exit the loop */
+            cpu_loop_exit(CPU(env_archcpu(env)));
+        }
         bql_unlock();
         r = 0;
         break;
     case 0x288:
         /* time bomb (watchdog) */
         r = handle_diag_288(env, r1, r3);
+        break;
+    case 0x320:
+        /* cert store */
+        bql_lock();
+        handle_diag_320(env, r1, r3, GETPC());
+        bql_unlock();
+        r = 0;
+        break;
+    case 0x508:
+        /* secure ipl operations */
+        bql_lock();
+        handle_diag_508(env, r1, r3, GETPC());
+        bql_unlock();
+        r = 0;
         break;
     default:
         r = -1;
@@ -710,6 +729,8 @@ void HELPER(stfl)(CPUS390XState *env)
 
 uint32_t HELPER(stfle)(CPUS390XState *env, uint64_t addr)
 {
+    const int mmu_idx = cpu_mmu_index(env_cpu(env), false);
+    const MemOpIdx oi = make_memop_idx(MO_8, mmu_idx);
     const uintptr_t ra = GETPC();
     const int count_bytes = ((env->regs[0] & 0xff) + 1) * 8;
     int max_bytes;
@@ -728,7 +749,7 @@ uint32_t HELPER(stfle)(CPUS390XState *env, uint64_t addr)
      * not store the words, and existing software depend on that.
      */
     for (i = 0; i < MIN(count_bytes, max_bytes); ++i) {
-        cpu_stb_data_ra(env, addr + i, stfl_bytes[i], ra);
+        cpu_stb_mmu(env, addr + i, stfl_bytes[i], oi, ra);
     }
 
     env->regs[0] = deposit64(env->regs[0], 0, 8, (max_bytes / 8) - 1);

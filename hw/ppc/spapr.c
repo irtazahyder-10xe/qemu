@@ -38,6 +38,7 @@
 #include "system/system.h"
 #include "system/hostmem.h"
 #include "system/numa.h"
+#include "system/physmem.h"
 #include "system/tcg.h"
 #include "system/qtest.h"
 #include "system/reset.h"
@@ -1858,7 +1859,7 @@ static void spapr_machine_reset(MachineState *machine, ResetType type)
 
         spapr_cpu_set_entry_state(first_ppc_cpu, SPAPR_ENTRY_POINT,
                                   0, fdt_addr, 0);
-        cpu_physical_memory_write(fdt_addr, fdt, fdt_totalsize(fdt));
+        physical_memory_write(fdt_addr, fdt, fdt_totalsize(fdt));
     }
 
     g_free(spapr->fdt_blob);
@@ -3517,6 +3518,8 @@ static void spapr_machine_finalizefn(Object *obj)
     SpaprMachineState *spapr = SPAPR_MACHINE(obj);
 
     g_free(spapr->kvm_type);
+    g_free(spapr->host_model);
+    g_free(spapr->host_serial);
 }
 
 void spapr_do_system_reset_on_cpu(CPUState *cs, run_on_cpu_data arg)
@@ -3547,7 +3550,7 @@ void spapr_do_system_reset_on_cpu(CPUState *cs, run_on_cpu_data arg)
     }
 }
 
-static void spapr_nmi(NMIState *n, int cpu_index, Error **errp)
+static void spapr_nmi(NMIState *ns)
 {
     CPUState *cs;
 
@@ -3685,7 +3688,7 @@ struct SpaprDimmState {
 static SpaprDimmState *spapr_pending_dimm_unplugs_find(SpaprMachineState *s,
                                                        PCDIMMDevice *dimm)
 {
-    SpaprDimmState *dimm_state = NULL;
+    SpaprDimmState *dimm_state;
 
     QTAILQ_FOREACH(dimm_state, &s->pending_dimm_unplugs, next) {
         if (dimm_state->dimm == dimm) {
@@ -4644,12 +4647,12 @@ static void spapr_machine_class_init(ObjectClass *oc, const void *data)
     hc->unplug_request = spapr_machine_device_unplug_request;
     hc->unplug = spapr_machine_device_unplug;
 
-    mc->default_cpu_type = POWERPC_CPU_TYPE_NAME("power10_v2.0");
+    mc->default_cpu_type = POWERPC_CPU_TYPE_NAME("power11_v2.0");
     mc->has_hotpluggable_cpus = true;
     mc->nvdimm_supported = true;
     smc->resize_hpt_default = SPAPR_RESIZE_HPT_ENABLED;
     fwc->get_dev_path = spapr_get_fw_dev_path;
-    nc->nmi_monitor_handler = spapr_nmi;
+    nc->raise_nmi = spapr_nmi;
     vhc->cpu_in_nested = spapr_cpu_in_nested;
     vhc->deliver_hv_excp = spapr_exit_nested;
     vhc->hypercall = emulate_spapr_hypercall;
@@ -4761,14 +4764,37 @@ static void spapr_machine_latest_class_options(MachineClass *mc)
     DEFINE_SPAPR_MACHINE_IMPL(false, major, minor)
 
 /*
- * pseries-11.0
+ * pseries-11.2
  */
-static void spapr_machine_11_0_class_options(MachineClass *mc)
+static void spapr_machine_11_2_class_options(MachineClass *mc)
 {
     /* Defaults for the latest behaviour inherited from the base class */
 }
 
-DEFINE_SPAPR_MACHINE_AS_LATEST(11, 0);
+DEFINE_SPAPR_MACHINE_AS_LATEST(11, 2);
+
+/*
+ * pseries-11.1
+ */
+static void spapr_machine_11_1_class_options(MachineClass *mc)
+{
+    spapr_machine_11_2_class_options(mc);
+    compat_props_add(mc->compat_props, hw_compat_11_1, hw_compat_11_1_len);
+}
+
+DEFINE_SPAPR_MACHINE(11, 1);
+
+/*
+ * pseries-11.0
+ */
+static void spapr_machine_11_0_class_options(MachineClass *mc)
+{
+    spapr_machine_11_1_class_options(mc);
+    compat_props_add(mc->compat_props, hw_compat_11_0, hw_compat_11_0_len);
+    mc->default_cpu_type = POWERPC_CPU_TYPE_NAME("power10_v2.0");
+}
+
+DEFINE_SPAPR_MACHINE(11, 0);
 
 /*
  * pseries-10.2

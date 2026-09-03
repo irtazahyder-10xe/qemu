@@ -22,13 +22,17 @@
 #include "qapi/error.h"
 #include "system/address-spaces.h"
 #include "exec/cputlb.h"
+#include "exec/target_page.h"
 #include "system/memory.h"
 #include "qemu/target-info.h"
+#include "hw/core/boards.h"
 #include "hw/core/qdev.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/core/sysemu-cpu-ops.h"
 #include "migration/vmstate.h"
+#include "system/hw_accel.h"
 #include "system/tcg.h"
+#include "cpu-internal.h"
 
 bool cpu_has_work(CPUState *cpu)
 {
@@ -55,29 +59,28 @@ bool cpu_get_memory_mapping(CPUState *cpu, MemoryMappingList *list,
     return false;
 }
 
-hwaddr cpu_get_phys_page_attrs_debug(CPUState *cpu, vaddr addr,
-                                     MemTxAttrs *attrs)
+bool cpu_translate_for_debug(CPUState *cpu, vaddr addr,
+                             TranslateForDebugResult *result)
 {
-    hwaddr paddr;
-
-    if (cpu->cc->sysemu_ops->get_phys_page_attrs_debug) {
-        paddr = cpu->cc->sysemu_ops->get_phys_page_attrs_debug(cpu, addr,
-                                                               attrs);
+    if (cpu->cc->sysemu_ops->translate_for_debug) {
+        return cpu->cc->sysemu_ops->translate_for_debug(cpu, addr, result);
     } else {
-        /* Fallback for CPUs which don't implement the _attrs_ hook */
-        *attrs = MEMTXATTRS_UNSPECIFIED;
-        paddr = cpu->cc->sysemu_ops->get_phys_page_debug(cpu, addr);
+        /* Fallbacks for CPUs which don't implement translate_for_debug */
+        result->physaddr = cpu->cc->sysemu_ops->get_phys_addr_debug(cpu, addr);
+        result->attrs = MEMTXATTRS_UNSPECIFIED;
+        if (result->physaddr == -1) {
+            return false;
+        }
+        /* Indicate that this is a debug access. */
+        result->attrs.debug = 1;
+        /*
+         * Assume memory access permissions are valid for the whole page.
+         * Targets where this isn't true should implement the
+         * translate_for_debug method.
+         */
+        result->lg_page_size = TARGET_PAGE_BITS;
+        return true;
     }
-    /* Indicate that this is a debug access. */
-    attrs->debug = 1;
-    return paddr;
-}
-
-hwaddr cpu_get_phys_page_debug(CPUState *cpu, vaddr addr)
-{
-    MemTxAttrs attrs = {};
-
-    return cpu_get_phys_page_attrs_debug(cpu, addr, &attrs);
 }
 
 int cpu_asidx_from_attrs(CPUState *cpu, MemTxAttrs attrs)
@@ -188,7 +191,7 @@ void cpu_exec_class_post_init(CPUClass *cc)
     g_assert(cc->sysemu_ops->has_work);
 }
 
-void cpu_exec_initfn(CPUState *cpu)
+void cpu_exec_init(CPUState *cpu)
 {
     cpu->memory = get_system_memory();
     object_ref(OBJECT(cpu->memory));
@@ -218,6 +221,31 @@ static int cpu_common_pre_load(void *opaque)
     cpu->exception_index = -1;
 
     return 0;
+}
+
+void cpu_exec_realize(CPUState *cpu, Error **errp)
+{
+    Object *machine = qdev_get_machine();
+
+    /*
+     * qdev_get_machine() can return something that's not TYPE_MACHINE
+     * if this is one of the user-only emulators; in that case there's
+     * no need to check the ignore_memory_transaction_failures board flag.
+     */
+    if (object_dynamic_cast(machine, TYPE_MACHINE)) {
+        MachineClass *mc = MACHINE_GET_CLASS(machine);
+
+        if (mc) {
+            cpu->ignore_memory_transaction_failures =
+                mc->ignore_memory_transaction_failures;
+        }
+    }
+
+    if (DEVICE(cpu)->hotplugged) {
+        cpu_synchronize_post_init(cpu);
+        cpu_resume(cpu);
+    }
+
 }
 
 static bool cpu_common_exception_index_needed(void *opaque)

@@ -24,35 +24,18 @@
 #include "qemu/osdep.h"
 #include "cpu.h"
 #include "monitor/monitor.h"
-#include "monitor/hmp-target.h"
 #include "monitor/hmp.h"
 
 
-void hmp_info_tlb(Monitor *mon, const QDict *qdict)
+#ifdef CONFIG_HMP
+void hmp_info_tlb(MonitorHMP *hmp, const QDict *qdict)
 {
-    CPUArchState *env1 = mon_get_cpu_env(mon);
+    CPUArchState *env1 = monitor_hmp_get_cpu_env(hmp);
 
     if (!env1) {
-        monitor_printf(mon, "No CPU available\n");
+        monitor_hmp_printf(hmp, "No CPU available\n");
         return;
     }
     dump_mmu(env1);
 }
-
-const MonitorDef monitor_defs[] = {
-#ifdef TARGET_SPARC64
-    { "asi", offsetof(CPUSPARCState, asi) },
-    { "pstate", offsetof(CPUSPARCState, pstate) },
-    { "cansave", offsetof(CPUSPARCState, cansave) },
-    { "canrestore", offsetof(CPUSPARCState, canrestore) },
-    { "otherwin", offsetof(CPUSPARCState, otherwin) },
-    { "wstate", offsetof(CPUSPARCState, wstate) },
-    { "cleanwin", offsetof(CPUSPARCState, cleanwin) },
 #endif
-    { NULL },
-};
-
-const MonitorDef *target_monitor_defs(void)
-{
-    return monitor_defs;
-}

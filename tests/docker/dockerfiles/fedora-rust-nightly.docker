@@ -50,7 +50,6 @@ exec "$@"\n' > /usr/bin/nosync && \
                        glib2-static \
                        glibc-langpack-en \
                        glibc-static \
-                       glusterfs-api-devel \
                        gnutls-devel \
                        gtk-vnc2-devel \
                        gtk3-devel \
@@ -105,10 +104,8 @@ exec "$@"\n' > /usr/bin/nosync && \
                        pkgconfig \
                        pulseaudio-libs-devel \
                        python3 \
-                       python3-PyYAML \
                        python3-numpy \
                        python3-opencv \
-                       python3-pillow \
                        python3-pip \
                        python3-setuptools \
                        python3-sphinx \
@@ -150,7 +147,7 @@ exec "$@"\n' > /usr/bin/nosync && \
     ln -s /usr/bin/ccache /usr/libexec/ccache-wrappers/clang && \
     ln -s /usr/bin/ccache /usr/libexec/ccache-wrappers/gcc
 
-RUN /usr/bin/pip3 install meson==1.8.1
+RUN /usr/bin/pip3 install meson==1.12.0
 
 ENV CCACHE_WRAPPERSDIR="/usr/libexec/ccache-wrappers"
 ENV LANG="en_US.UTF-8"
@@ -186,4 +183,4 @@ ARG UID
 RUN if [ "${USER}" ]; then \
   id ${USER} 2>/dev/null || useradd -u ${UID} -U ${USER}; fi
 
-ENV ENABLE_RUST 1
+ENV ENABLE_RUST=1

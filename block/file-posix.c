@@ -43,9 +43,11 @@
 #include "scsi/constants.h"
 #include "scsi/utils.h"
 
-#if defined(__APPLE__) && (__MACH__)
+#ifndef __sun__
 #include <sys/ioctl.h>
-#if defined(HAVE_HOST_BLOCK_DEVICE)
+#endif
+
+#if defined(__APPLE__) && (__MACH__) && defined(HAVE_HOST_BLOCK_DEVICE)
 #include <paths.h>
 #include <sys/param.h>
 #include <sys/mount.h>
@@ -57,7 +59,6 @@
 //#include <IOKit/storage/IOCDTypes.h>
 #include <IOKit/storage/IODVDMedia.h>
 #include <CoreFoundation/CoreFoundation.h>
-#endif /* defined(HAVE_HOST_BLOCK_DEVICE) */
 #endif
 
 #ifdef __sun__
@@ -65,7 +66,6 @@
 #include <sys/dkio.h>
 #endif
 #ifdef __linux__
-#include <sys/ioctl.h>
 #include <sys/param.h>
 #include <sys/syscall.h>
 #include <sys/vfs.h>
@@ -79,7 +79,7 @@
 #include <linux/hdreg.h>
 #include <linux/magic.h>
 #include <scsi/sg.h>
-#ifdef __s390__
+#ifdef __s390x__
 #include <asm/dasd.h>
 #endif
 #ifndef FS_NOCOW_FL
@@ -95,25 +95,18 @@
 #endif
 
 #ifdef __OpenBSD__
-#include <sys/ioctl.h>
 #include <sys/disklabel.h>
 #include <sys/dkio.h>
 #endif
 
 #ifdef __NetBSD__
-#include <sys/ioctl.h>
 #include <sys/disklabel.h>
 #include <sys/dkio.h>
 #include <sys/disk.h>
 #endif
 
 #ifdef __DragonFly__
-#include <sys/ioctl.h>
 #include <sys/diskslice.h>
-#endif
-
-#ifdef EMSCRIPTEN
-#include <sys/ioctl.h>
 #endif
 
 /* OS X does not have O_DSYNC */
@@ -800,18 +793,6 @@ static int raw_open_common(BlockDriverState *bs, QDict *options,
             goto fail;
         }
     }
-#ifdef CONFIG_BLKZONED
-    /*
-     * The kernel page cache does not reliably work for writes to SWR zones
-     * of zoned block device because it can not guarantee the order of writes.
-     */
-    if ((bs->bl.zoned != BLK_Z_NONE) &&
-        (!(s->open_flags & O_DIRECT))) {
-        error_setg(errp, "The driver supports zoned devices, and it requires "
-                         "cache.direct=on, which was not specified.");
-        return -EINVAL; /* No host kernel page cache */
-    }
-#endif
 
 #ifdef __FreeBSD__
     if (S_ISCHR(st.st_mode)) {
@@ -1462,6 +1443,16 @@ static void raw_refresh_zoned_limits(BlockDriverState *bs, struct stat *st,
     }
     bs->bl.zoned = zoned;
 
+    /*
+     * The kernel page cache does not reliably work for writes to SWR zones of
+     * zoned block devices because it can not guarantee the order of writes.
+     */
+    if (!(s->open_flags & O_DIRECT)) {
+        error_setg(errp, "The driver supports zoned devices, and it requires "
+                         "cache.direct=on, which was not specified.");
+        goto no_zoned;
+    }
+
     ret = get_sysfs_long_val(st, "max_open_zones");
     if (ret >= 0) {
         bs->bl.max_open_zones = ret;
@@ -1502,7 +1493,7 @@ static void raw_refresh_zoned_limits(BlockDriverState *bs, struct stat *st,
         bs->bl.max_append_sectors = ret >> BDRV_SECTOR_BITS;
     }
 
-    ret = get_sysfs_long_val(st, "physical_block_size");
+    ret = get_sysfs_long_val(st, "zone_write_granularity");
     if (ret >= 0) {
         bs->bl.write_granularity = ret;
     }
@@ -2098,7 +2089,7 @@ static int handle_aiocb_write_zeroes_unmap(void *opaque)
 }
 
 #ifndef HAVE_COPY_FILE_RANGE
-#ifndef EMSCRIPTEN
+#if !defined(EMSCRIPTEN) && !defined(__GNU__)
 static
 #endif
 ssize_t copy_file_range(int in_fd, off_t *in_off, int out_fd,

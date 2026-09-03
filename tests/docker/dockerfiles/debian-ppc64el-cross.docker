@@ -43,7 +43,6 @@ RUN export DEBIAN_FRONTEND=noninteractive && \
                       python3 \
                       python3-numpy \
                       python3-opencv \
-                      python3-pillow \
                       python3-pip \
                       python3-setuptools \
                       python3-sphinx \
@@ -51,7 +50,6 @@ RUN export DEBIAN_FRONTEND=noninteractive && \
                       python3-tomli \
                       python3-venv \
                       python3-wheel \
-                      python3-yaml \
                       rpm2cpio \
                       rustc \
                       sed \
@@ -70,7 +68,7 @@ RUN export DEBIAN_FRONTEND=noninteractive && \
     dpkg-reconfigure locales && \
     rm -f /usr/lib*/python3*/EXTERNALLY-MANAGED
 
-RUN /usr/bin/pip3 install meson==1.8.1
+RUN /usr/bin/pip3 install meson==1.12.0
 
 ENV CCACHE_WRAPPERSDIR="/usr/libexec/ccache-wrappers"
 ENV LANG="en_US.UTF-8"
@@ -108,7 +106,6 @@ RUN export DEBIAN_FRONTEND=noninteractive && \
                       libgbm-dev:ppc64el \
                       libgcrypt20-dev:ppc64el \
                       libglib2.0-dev:ppc64el \
-                      libglusterfs-dev:ppc64el \
                       libgnutls28-dev:ppc64el \
                       libgtk-3-dev:ppc64el \
                       libgtk-vnc-2.0-dev:ppc64el \
@@ -134,7 +131,7 @@ RUN export DEBIAN_FRONTEND=noninteractive && \
                       libsdl2-dev:ppc64el \
                       libsdl2-image-dev:ppc64el \
                       libseccomp-dev:ppc64el \
-                      libselinux1-dev:ppc64el \
+                      libselinux-dev:ppc64el \
                       libslirp-dev:ppc64el \
                       libsnappy-dev:ppc64el \
                       libsndio-dev:ppc64el \
@@ -187,4 +184,4 @@ ARG UID
 RUN if [ "${USER}" ]; then \
   id ${USER} 2>/dev/null || useradd -u ${UID} -U ${USER}; fi
 
-ENV ENABLE_RUST 1
+ENV ENABLE_RUST=1

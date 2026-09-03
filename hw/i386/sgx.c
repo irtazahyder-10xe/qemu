@@ -17,7 +17,6 @@
 #include "monitor/qdev.h"
 #include "monitor/monitor.h"
 #include "monitor/hmp.h"
-#include "monitor/hmp-target.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
 #include "qapi/qapi-commands-misc-i386.h"
@@ -235,7 +234,8 @@ SgxInfo *qmp_query_sgx(Error **errp)
     return info;
 }
 
-void hmp_info_sgx(Monitor *mon, const QDict *qdict)
+#ifdef CONFIG_HMP
+void hmp_info_sgx(MonitorHMP *hmp, const QDict *qdict)
 {
     Error *err = NULL;
     SgxEpcSectionList *section_list, *section;
@@ -246,26 +246,27 @@ void hmp_info_sgx(Monitor *mon, const QDict *qdict)
         error_report_err(err);
         return;
     }
-    monitor_printf(mon, "SGX support: %s\n",
-                   info->sgx ? "enabled" : "disabled");
-    monitor_printf(mon, "SGX1 support: %s\n",
-                   info->sgx1 ? "enabled" : "disabled");
-    monitor_printf(mon, "SGX2 support: %s\n",
-                   info->sgx2 ? "enabled" : "disabled");
-    monitor_printf(mon, "FLC support: %s\n",
-                   info->flc ? "enabled" : "disabled");
+    monitor_hmp_printf(hmp, "SGX support: %s\n",
+                       info->sgx ? "enabled" : "disabled");
+    monitor_hmp_printf(hmp, "SGX1 support: %s\n",
+                       info->sgx1 ? "enabled" : "disabled");
+    monitor_hmp_printf(hmp, "SGX2 support: %s\n",
+                       info->sgx2 ? "enabled" : "disabled");
+    monitor_hmp_printf(hmp, "FLC support: %s\n",
+                       info->flc ? "enabled" : "disabled");
 
     section_list = info->sections;
     for (section = section_list; section; section = section->next) {
-        monitor_printf(mon, "NUMA node #%" PRId64 ": ",
-                       section->value->node);
-        monitor_printf(mon, "size=%" PRIu64 "\n",
-                       section->value->size);
+        monitor_hmp_printf(hmp, "NUMA node #%" PRId64 ": ",
+                           section->value->node);
+        monitor_hmp_printf(hmp, "size=%" PRIu64 "\n",
+                           section->value->size);
         size += section->value->size;
     }
-    monitor_printf(mon, "total size=%" PRIu64 "\n",
-                   size);
+    monitor_hmp_printf(hmp, "total size=%" PRIu64 "\n",
+                       size);
 }
+#endif
 
 bool check_sgx_support(void)
 {

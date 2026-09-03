@@ -104,18 +104,42 @@
     '*vectors': 'uint32' } }
 
 ##
-# @String:
+# @PasstSearch:
 #
-# A fat type wrapping 'str', to be embedded in lists.
+# @str: DNS domain name suffix for host name lookup, or "none".  See
+#     passt(1) option --search.
 #
-# Since: 1.2
+# Since: 10.1
 ##
-{ 'struct': 'String',
+{ 'struct': 'PasstSearch',
   'data': {
     'str': 'str' } }
 
 ##
-# @NetDevPasstOptions:
+# @PasstPortForward:
+#
+# @str: passt port forwarding specification, see passt(1) option
+#     --tcp-ports and --udp-ports.
+#
+# Since: 10.1
+##
+{ 'struct': 'PasstPortForward',
+  'data': {
+    'str': 'str' } }
+
+##
+# @PasstParameter:
+#
+# @str: Additional arguments for the passt executable, see passt(1)
+#
+# Since: 10.1
+##
+{ 'struct': 'PasstParameter',
+  'data': {
+    'str': 'str' } }
+
+##
+# @NetdevPasstOptions:
 #
 # Unprivileged user-mode network connectivity using passt
 #
@@ -191,7 +215,7 @@
 #
 # Since: 10.1
 ##
-{ 'struct': 'NetDevPasstOptions',
+{ 'struct': 'NetdevPasstOptions',
   'data': {
     '*path':               'str',
     '*quiet':              'bool',
@@ -206,7 +230,7 @@
     '*outbound-if4':       'str',
     '*outbound-if6':       'str',
     '*dns':                'str',
-    '*search':             ['String'],
+    '*search':             ['PasstSearch'],
     '*fqdn':               'str',
     '*dhcp-dns':           'bool',
     '*dhcp-search':        'bool',
@@ -224,10 +248,56 @@
     '*freebind':           'bool',
     '*ipv4':               'bool',
     '*ipv6':               'bool',
-    '*tcp-ports':          ['String'],
-    '*udp-ports':          ['String'],
-    '*param':             ['String'] },
+    '*tcp-ports':          ['PasstPortForward'],
+    '*udp-ports':          ['PasstPortForward'],
+    '*param':              ['PasstParameter'] },
     'if': 'CONFIG_PASST' }
+
+##
+# @NetdevUserDomainSuffix:
+#
+# @str: DNS domain name suffix for host name lookup, similar to
+#     resolv.conf(5)
+#
+# Since: 1.2
+##
+{ 'struct': 'NetdevUserDomainSuffix',
+  'data': {
+    'str': 'str' } }
+
+##
+# @NetdevUserHostForward:
+#
+# @str: Host port forwarding rule
+#
+# TODO: This string gets parsed by slirp_hostfwd().  We fail to
+#    document syntax and semantics here.  We do in qemu-options.hx.
+#    Parsing structured configuration from strings is a no-no for QMP.
+#    This should really be a struct.  Not sure it's worth the bother
+#    now.
+#
+# Since: 1.2
+##
+{ 'struct': 'NetdevUserHostForward',
+  'data': {
+    'str': 'str' } }
+
+##
+# @NetdevUserGuestForward:
+#
+# @str: Guest port forwarding rule
+#
+# TODO: This string gets parsed by slirp_guestfwd().  We fail to
+#    document syntax and semantics here.  We do in qemu-options.hx.
+#    Parsing structured configuration from strings is a no-no for QMP.
+#    This should really be a struct.  Not sure it's worth the bother
+#    now.
+#
+# Since: 1.2
+##
+{ 'struct': 'NetdevUserGuestForward',
+  'data': {
+    'str': 'str' } }
 
 ##
 # @NetdevUserOptions:
@@ -305,7 +375,7 @@
     '*bootfile':  'str',
     '*dhcpstart': 'str',
     '*dns':       'str',
-    '*dnssearch': ['String'],
+    '*dnssearch': ['NetdevUserDomainSuffix'],
     '*domainname': 'str',
     '*ipv6-prefix':      'str',
     '*ipv6-prefixlen':   'int',
@@ -313,8 +383,8 @@
     '*ipv6-dns':         'str',
     '*smb':       'str',
     '*smbserver': 'str',
-    '*hostfwd':   ['String'],
-    '*guestfwd':  ['String'],
+    '*hostfwd':   ['NetdevUserHostForward'],
+    '*guestfwd':  ['NetdevUserGuestForward'],
     '*tftp-server-name': 'str' } }
 
 ##
@@ -877,7 +947,7 @@
   'discriminator': 'type',
   'data': {
     'nic':      'NetLegacyNicOptions',
-    'passt':    { 'type': 'NetDevPasstOptions',
+    'passt':    { 'type': 'NetdevPasstOptions',
                   'if': 'CONFIG_PASST' },
     'user':     'NetdevUserOptions',
     'tap':      'NetdevTapOptions',
@@ -1191,3 +1261,169 @@
 ##
 { 'event': 'NETDEV_VHOST_USER_DISCONNECTED',
   'data': { 'netdev-id': 'str' } }
+
+##
+# @UsernetInfo:
+#
+# Information about a user-mode network stack (slirp).
+#
+# @hub-id: The hub id, if available.
+#
+# @hub-name: The name of the hub.
+#
+# @info: Network information from slirp.
+#
+# Since: 11.2
+##
+{ 'struct': 'UsernetInfo',
+  'data': {
+    '*hub-id': 'int',
+    'hub-name': 'str',
+    'info': 'str' },
+  'if': 'CONFIG_SLIRP' }
+
+##
+# @x-query-usernet:
+#
+# Query user-mode network stack connection states.
+#
+# Features:
+#
+# @unstable: This command is meant for debugging.
+#
+# Returns: list of user-mode network stack information.
+#
+# Since: 11.2
+#
+# .. qmp-example::
+#
+#     -> { "execute": "x-query-usernet" }
+#     <- { "return": [ { "hub-id": 0, "hub-name": "vnet",
+#                        "info": "..." } ] }
+##
+{ 'command': 'x-query-usernet',
+  'returns': ['UsernetInfo'],
+  'if': 'CONFIG_SLIRP',
+  'features': [ 'unstable' ] }
+
+##
+# @NetFilterInfo:
+#
+# Information about a netfilter attached to a network client.
+#
+# @name: filter object name (QOM path component)
+#
+# @type: QOM type name (e.g. "filter-mirror")
+#
+# @info: filter properties as comma-separated key=value pairs
+#        (excluding @type)
+#
+# Since: 11.2
+##
+{ 'struct': 'NetFilterInfo',
+  'data': {
+    'name': 'str',
+    'type': 'str',
+    'info': 'str' } }
+
+##
+# @NetworkClientInfo:
+#
+# Information about a network client.
+#
+# @name: unique network client identifier
+#
+# @queue-index: index of this queue (0 for single-queue clients)
+#
+# @type: network client driver type
+#
+# @info-str: driver-specific formatted information string (e.g.
+#            "model=e1000,macaddr=52:54:00:12:34:56")
+#
+# @peer: the connected peer client (always a leaf; the peer's own
+#        peer field is never populated)
+#
+# @filters: attached netfilters
+#
+# Since: 11.2
+##
+{ 'struct': 'NetworkClientInfo',
+  'data': {
+    'name': 'str',
+    'queue-index': 'uint32',
+    'type': 'NetClientDriver',
+    'info-str': 'str',
+    '*peer': 'NetworkClientInfo',
+    'filters': ['NetFilterInfo'] } }
+
+##
+# @NetHubPortInfo:
+#
+# Information about a hub port.
+#
+# @name: hub port identifier
+#
+# @peer: the network client connected through this port
+#
+# Since: 11.2
+##
+{ 'struct': 'NetHubPortInfo',
+  'data': {
+    'name': 'str',
+    '*peer': 'NetworkClientInfo' } }
+
+##
+# @NetHubInfo:
+#
+# Information about a network hub.
+#
+# @id: hub identifier
+#
+# @ports: list of ports on this hub
+#
+# Since: 11.2
+##
+{ 'struct': 'NetHubInfo',
+  'data': {
+    'id': 'int',
+    'ports': ['NetHubPortInfo'] } }
+
+##
+# @NetworkInfo:
+#
+# Information about the network configuration.
+#
+# @hubs: network hubs and their ports
+#
+# @clients: network clients not associated with a hub
+#
+# Since: 11.2
+##
+{ 'struct': 'NetworkInfo',
+  'data': {
+    'hubs': ['NetHubInfo'],
+    'clients': ['NetworkClientInfo'] } }
+
+##
+# @x-query-network:
+#
+# Query the network configuration including hubs and clients.
+#
+# Features:
+#
+# @unstable: This command is meant for debugging.
+#
+# Returns: @NetworkInfo describing hubs and clients.
+#
+# Since: 11.2
+#
+# .. qmp-example::
+#
+#     -> { "execute": "x-query-network" }
+#     <- { "return": { "clients": [ { "name": "st0",
+#                      "queue-index": 0, "type": "stream",
+#                      "info-str": "listening" } ] } }
+##
+{ 'command': 'x-query-network',
+  'returns': 'NetworkInfo',
+  'features': [ 'unstable' ] }

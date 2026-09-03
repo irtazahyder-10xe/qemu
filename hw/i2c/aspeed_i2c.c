@@ -159,6 +159,7 @@ static uint64_t aspeed_i2c_bus_new_read(AspeedI2CBus *bus, hwaddr offset,
     case A_I2CS_INTR_CTRL:
     case A_I2CS_DMA_LEN_STS:
     case A_I2CS_INTR_STS:
+    case A_I2CC_VERSION_CTRL:
         value = bus->regs[offset / sizeof(*bus->regs)];
         break;
     case A_I2CC_DMA_ADDR:
@@ -236,7 +237,7 @@ static void aspeed_i2c_set_tx_dma_dram_offset(AspeedI2CBus *bus)
         value = bus->regs[R_I2CM_DMA_TX_ADDR];
         bus->dma_dram_offset =
             deposit64(bus->dma_dram_offset, 0, 32,
-                      FIELD_EX32(value, I2CM_DMA_TX_ADDR, ADDR));
+                      value & aic->dma_addr_lo_mask);
         if (aic->has_dma64) {
             value = bus->regs[R_I2CM_DMA_TX_ADDR_HI];
             bus->dma_dram_offset =
@@ -246,7 +247,7 @@ static void aspeed_i2c_set_tx_dma_dram_offset(AspeedI2CBus *bus)
     } else {
         value = bus->regs[R_I2CD_DMA_ADDR];
         bus->dma_dram_offset = deposit64(bus->dma_dram_offset, 0, 32,
-                                         value & 0x3ffffffc);
+                                         value & aic->dma_addr_lo_mask);
     }
 }
 
@@ -261,7 +262,7 @@ static void aspeed_i2c_set_rx_dma_dram_offset(AspeedI2CBus *bus)
         value = bus->regs[R_I2CM_DMA_RX_ADDR];
         bus->dma_dram_offset =
             deposit64(bus->dma_dram_offset, 0, 32,
-                      FIELD_EX32(value, I2CM_DMA_RX_ADDR, ADDR));
+                      value & aic->dma_addr_lo_mask);
         if (aic->has_dma64) {
             value = bus->regs[R_I2CM_DMA_RX_ADDR_HI];
             bus->dma_dram_offset =
@@ -271,7 +272,7 @@ static void aspeed_i2c_set_rx_dma_dram_offset(AspeedI2CBus *bus)
     } else {
         value = bus->regs[R_I2CD_DMA_ADDR];
         bus->dma_dram_offset = deposit64(bus->dma_dram_offset, 0, 32,
-                                         value & 0x3ffffffc);
+                                         value & aic->dma_addr_lo_mask);
     }
 }
 
@@ -293,6 +294,65 @@ static int aspeed_i2c_dma_read(AspeedI2CBus *bus, uint8_t *data)
     bus->dma_dram_offset++;
     bus->regs[reg_dma_len]--;
     return 0;
+}
+
+/*
+ * In AST2700 buffer mode the master DMA command bits (TX/RX_DMA_EN) and the
+ * DMA length registers are reused, but data is moved through the controller
+ * internal SRAM pool at the offset programmed in I2CM_DMA_TX/RX_ADDR instead
+ * of DRAM. FUNC_CFG_DMA_EN selects between the two (set = DRAM).
+ */
+static bool aspeed_i2c_bus_dma_to_pool(AspeedI2CBus *bus)
+{
+    return aspeed_i2c_is_new_mode(bus->controller) &&
+           !ARRAY_FIELD_EX32(bus->regs, I2CC_VERSION_CTRL, FUNC_CFG_DMA_EN);
+}
+
+static int aspeed_i2c_bus_send_dma_pool(AspeedI2CBus *bus)
+{
+    AspeedI2CClass *aic = ASPEED_I2C_GET_CLASS(bus->controller);
+    uint32_t reg_dma_len = aspeed_i2c_bus_dma_len_offset(bus);
+    uint32_t reg_cmd = aspeed_i2c_bus_cmd_offset(bus);
+    uint32_t offset = bus->regs[R_I2CM_DMA_TX_ADDR];
+    uint8_t *pool_base = aic->bus_pool_base(bus);
+    int ret = -1;
+    int i;
+
+    ARRAY_FIELD_DP32(bus->regs, I2CM_DMA_LEN_STS, TX_LEN, 0);
+    for (i = 0; bus->regs[reg_dma_len] &&
+                offset + i < ASPEED_I2C_BUS_POOL_SIZE; i++) {
+        trace_aspeed_i2c_bus_send("BUFF", i + 1, bus->regs[reg_dma_len],
+                                  pool_base[offset + i]);
+        ret = i2c_send(bus->bus, pool_base[offset + i]);
+        bus->regs[reg_dma_len]--;
+        ARRAY_FIELD_DP32(bus->regs, I2CM_DMA_LEN_STS, TX_LEN, i + 1);
+        if (ret) {
+            break;
+        }
+    }
+    SHARED_ARRAY_FIELD_DP32(bus->regs, reg_cmd, TX_DMA_EN, 0);
+    return ret;
+}
+
+static void aspeed_i2c_bus_recv_dma_pool(AspeedI2CBus *bus)
+{
+    AspeedI2CClass *aic = ASPEED_I2C_GET_CLASS(bus->controller);
+    uint32_t reg_dma_len = aspeed_i2c_bus_dma_len_offset(bus);
+    uint32_t reg_cmd = aspeed_i2c_bus_cmd_offset(bus);
+    uint32_t offset = bus->regs[R_I2CM_DMA_RX_ADDR];
+    uint8_t *pool_base = aic->bus_pool_base(bus);
+    int i;
+
+    ARRAY_FIELD_DP32(bus->regs, I2CM_DMA_LEN_STS, RX_LEN, 0);
+    for (i = 0; bus->regs[reg_dma_len] &&
+                offset + i < ASPEED_I2C_BUS_POOL_SIZE; i++) {
+        pool_base[offset + i] = i2c_recv(bus->bus);
+        trace_aspeed_i2c_bus_recv("BUFF", i + 1, bus->regs[reg_dma_len],
+                                  pool_base[offset + i]);
+        bus->regs[reg_dma_len]--;
+        ARRAY_FIELD_DP32(bus->regs, I2CM_DMA_LEN_STS, RX_LEN, i + 1);
+    }
+    SHARED_ARRAY_FIELD_DP32(bus->regs, reg_cmd, RX_DMA_EN, 0);
 }
 
 static int aspeed_i2c_bus_send(AspeedI2CBus *bus)
@@ -320,6 +380,10 @@ static int aspeed_i2c_bus_send(AspeedI2CBus *bus)
         }
         SHARED_ARRAY_FIELD_DP32(bus->regs, reg_cmd, TX_BUFF_EN, 0);
     } else if (SHARED_ARRAY_FIELD_EX32(bus->regs, reg_cmd, TX_DMA_EN)) {
+        /* In buffer mode the DMA moves data through the pool, not DRAM */
+        if (aspeed_i2c_bus_dma_to_pool(bus)) {
+            return aspeed_i2c_bus_send_dma_pool(bus);
+        }
         /* In new mode, clear how many bytes we TXed */
         if (aspeed_i2c_is_new_mode(bus->controller)) {
             ARRAY_FIELD_DP32(bus->regs, I2CM_DMA_LEN_STS, TX_LEN, 0);
@@ -385,6 +449,11 @@ static void aspeed_i2c_bus_recv(AspeedI2CBus *bus)
         SHARED_ARRAY_FIELD_DP32(bus->regs, reg_pool_ctrl, RX_COUNT, i & 0xff);
         SHARED_ARRAY_FIELD_DP32(bus->regs, reg_cmd, RX_BUFF_EN, 0);
     } else if (SHARED_ARRAY_FIELD_EX32(bus->regs, reg_cmd, RX_DMA_EN)) {
+        /* In buffer mode the DMA moves data through the pool, not DRAM */
+        if (aspeed_i2c_bus_dma_to_pool(bus)) {
+            aspeed_i2c_bus_recv_dma_pool(bus);
+            return;
+        }
         /* In new mode, clear how many bytes we RXed */
         if (aspeed_i2c_is_new_mode(bus->controller)) {
             ARRAY_FIELD_DP32(bus->regs, I2CM_DMA_LEN_STS, RX_LEN, 0);
@@ -735,12 +804,10 @@ static void aspeed_i2c_bus_new_write(AspeedI2CBus *bus, hwaddr offset,
         aspeed_i2c_bus_raise_interrupt(bus);
         break;
     case A_I2CM_DMA_TX_ADDR:
-        bus->regs[R_I2CM_DMA_TX_ADDR] = FIELD_EX32(value, I2CM_DMA_TX_ADDR,
-                                                   ADDR);
+        bus->regs[R_I2CM_DMA_TX_ADDR] = value & aic->dma_addr_lo_mask;
         break;
     case A_I2CM_DMA_RX_ADDR:
-        bus->regs[R_I2CM_DMA_RX_ADDR] = FIELD_EX32(value, I2CM_DMA_RX_ADDR,
-                                                   ADDR);
+        bus->regs[R_I2CM_DMA_RX_ADDR] = value & aic->dma_addr_lo_mask;
         break;
     case A_I2CM_DMA_LEN:
         w1t = FIELD_EX32(value, I2CM_DMA_LEN, RX_BUF_LEN_W1T) ||
@@ -777,7 +844,7 @@ static void aspeed_i2c_bus_new_write(AspeedI2CBus *bus, hwaddr offset,
         bus->regs[R_I2CS_DEV_ADDR] = value;
         break;
     case A_I2CS_DMA_RX_ADDR:
-        bus->regs[R_I2CS_DMA_RX_ADDR] = value;
+        bus->regs[R_I2CS_DMA_RX_ADDR] = value & aic->dma_addr_lo_mask;
         break;
     case A_I2CS_DMA_LEN:
         if (FIELD_EX32(value, I2CS_DMA_LEN, RX_BUF_LEN_W1T)) {
@@ -855,6 +922,9 @@ static void aspeed_i2c_bus_new_write(AspeedI2CBus *bus, hwaddr offset,
         bus->regs[R_I2CS_DMA_RX_ADDR_HI] = FIELD_EX32(value,
                                                       I2CS_DMA_RX_ADDR_HI,
                                                       ADDR_HI);
+        break;
+    case A_I2CC_VERSION_CTRL:
+        bus->regs[R_I2CC_VERSION_CTRL] = value;
         break;
     default:
         qemu_log_mask(LOG_GUEST_ERROR, "%s: Bad offset 0x%" HWADDR_PRIx "\n",
@@ -1134,8 +1204,8 @@ static const MemoryRegionOps aspeed_i2c_bus_pool_ops = {
 
 static const VMStateDescription aspeed_i2c_bus_vmstate = {
     .name = TYPE_ASPEED_I2C,
-    .version_id = 7,
-    .minimum_version_id = 6,
+    .version_id = 8,
+    .minimum_version_id = 8,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32_ARRAY(regs, AspeedI2CBus, ASPEED_I2C_NEW_NUM_REG),
         VMSTATE_UINT32_V(pending_intr_sts, AspeedI2CBus, 7),
@@ -1147,8 +1217,8 @@ static const VMStateDescription aspeed_i2c_bus_vmstate = {
 
 static const VMStateDescription aspeed_i2c_vmstate = {
     .name = TYPE_ASPEED_I2C,
-    .version_id = 3,
-    .minimum_version_id = 3,
+    .version_id = 4,
+    .minimum_version_id = 4,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32(intr_status, AspeedI2CState),
         VMSTATE_STRUCT_ARRAY(busses, AspeedI2CState,
@@ -1160,9 +1230,9 @@ static const VMStateDescription aspeed_i2c_vmstate = {
     }
 };
 
-static void aspeed_i2c_reset(DeviceState *dev)
+static void aspeed_i2c_reset_hold(Object *obj, ResetType type)
 {
-    AspeedI2CState *s = ASPEED_I2C(dev);
+    AspeedI2CState *s = ASPEED_I2C(obj);
 
     s->intr_status = 0;
 }
@@ -1252,37 +1322,37 @@ static void aspeed_i2c_instance_init(Object *obj)
  * Address Definitions (AST2700)
  *   0x000 ... 0x0FF: Global Register
  *   0x100 ... 0x19F: Device 0
- *   0x1A0 ... 0x1BF: Device 0 buffer
+ *   0x1C0 ... 0x1FF: Device 0 buffer
  *   0x200 ... 0x29F: Device 1
- *   0x2A0 ... 0x2BF: Device 1 buffer
+ *   0x2C0 ... 0x2FF: Device 1 buffer
  *   0x300 ... 0x39F: Device 2
- *   0x3A0 ... 0x3BF: Device 2 buffer
+ *   0x3C0 ... 0x3FF: Device 2 buffer
  *   0x400 ... 0x49F: Device 3
- *   0x4A0 ... 0x4BF: Device 3 buffer
+ *   0x4C0 ... 0x4FF: Device 3 buffer
  *   0x500 ... 0x59F: Device 4
- *   0x5A0 ... 0x5BF: Device 4 buffer
+ *   0x5C0 ... 0x5FF: Device 4 buffer
  *   0x600 ... 0x69F: Device 5
- *   0x6A0 ... 0x6BF: Device 5 buffer
+ *   0x6C0 ... 0x6FF: Device 5 buffer
  *   0x700 ... 0x79F: Device 6
- *   0x7A0 ... 0x7BF: Device 6 buffer
+ *   0x7C0 ... 0x7FF: Device 6 buffer
  *   0x800 ... 0x89F: Device 7
- *   0x8A0 ... 0x8BF: Device 7 buffer
+ *   0x8C0 ... 0x8FF: Device 7 buffer
  *   0x900 ... 0x99F: Device 8
- *   0x9A0 ... 0x9BF: Device 8 buffer
+ *   0x9C0 ... 0x9FF: Device 8 buffer
  *   0xA00 ... 0xA9F: Device 9
- *   0xAA0 ... 0xABF: Device 9 buffer
+ *   0xAC0 ... 0xAFF: Device 9 buffer
  *   0xB00 ... 0xB9F: Device 10
- *   0xBA0 ... 0xBBF: Device 10 buffer
+ *   0xBC0 ... 0xBFF: Device 10 buffer
  *   0xC00 ... 0xC9F: Device 11
- *   0xCA0 ... 0xCBF: Device 11 buffer
+ *   0xCC0 ... 0xCFF: Device 11 buffer
  *   0xD00 ... 0xD9F: Device 12
- *   0xDA0 ... 0xDBF: Device 12 buffer
+ *   0xDC0 ... 0xDFF: Device 12 buffer
  *   0xE00 ... 0xE9F: Device 13
- *   0xEA0 ... 0xEBF: Device 13 buffer
+ *   0xEC0 ... 0xEFF: Device 13 buffer
  *   0xF00 ... 0xF9F: Device 14
- *   0xFA0 ... 0xFBF: Device 14 buffer
+ *   0xFC0 ... 0xFFF: Device 14 buffer
  *   0x1000 ... 0x109F: Device 15
- *   0x10A0 ... 0x10BF: Device 15 buffer
+ *   0x10C0 ... 0x10BF: Device 15 buffer
  */
 static void aspeed_i2c_realize(DeviceState *dev, Error **errp)
 {
@@ -1363,27 +1433,20 @@ static const Property aspeed_i2c_properties[] = {
 static void aspeed_i2c_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    ResettableClass *rc = RESETTABLE_CLASS(klass);
 
     dc->vmsd = &aspeed_i2c_vmstate;
-    device_class_set_legacy_reset(dc, aspeed_i2c_reset);
+    rc->phases.hold = aspeed_i2c_reset_hold;
     device_class_set_props(dc, aspeed_i2c_properties);
     dc->realize = aspeed_i2c_realize;
     dc->desc = "Aspeed I2C Controller";
 }
 
-static const TypeInfo aspeed_i2c_info = {
-    .name          = TYPE_ASPEED_I2C,
-    .parent        = TYPE_SYS_BUS_DEVICE,
-    .instance_init = aspeed_i2c_instance_init,
-    .instance_size = sizeof(AspeedI2CState),
-    .class_init    = aspeed_i2c_class_init,
-    .class_size = sizeof(AspeedI2CClass),
-    .abstract   = true,
-};
-
 static int aspeed_i2c_bus_new_slave_event(AspeedI2CBus *bus,
                                           enum i2c_event event)
 {
+    AspeedI2CClass *aic = ASPEED_I2C_GET_CLASS(bus->controller);
+
     switch (event) {
     case I2C_START_SEND_ASYNC:
         if (!SHARED_ARRAY_FIELD_EX32(bus->regs, R_I2CS_CMD, RX_DMA_EN)) {
@@ -1394,7 +1457,7 @@ static int aspeed_i2c_bus_new_slave_event(AspeedI2CBus *bus,
         ARRAY_FIELD_DP32(bus->regs, I2CS_DMA_LEN_STS, RX_LEN, 0);
         bus->dma_dram_offset =
             deposit64(bus->dma_dram_offset, 0, 32,
-                      ARRAY_FIELD_EX32(bus->regs, I2CS_DMA_RX_ADDR, ADDR));
+                      bus->regs[R_I2CS_DMA_RX_ADDR] & aic->dma_addr_lo_mask);
         bus->regs[R_I2CC_DMA_LEN] =
             ARRAY_FIELD_EX32(bus->regs, I2CS_DMA_LEN, RX_BUF_LEN) + 1;
         i2c_ack(bus->bus);
@@ -1499,20 +1562,20 @@ static void aspeed_i2c_bus_slave_class_init(ObjectClass *klass,
     sc->send_async = aspeed_i2c_bus_slave_send_async;
 }
 
-static const TypeInfo aspeed_i2c_bus_slave_info = {
-    .name           = TYPE_ASPEED_I2C_BUS_SLAVE,
-    .parent         = TYPE_I2C_SLAVE,
-    .instance_size  = sizeof(AspeedI2CBusSlave),
-    .class_init     = aspeed_i2c_bus_slave_class_init,
-};
-
-static void aspeed_i2c_bus_reset(DeviceState *dev)
+static void aspeed_i2c_bus_reset_hold(Object *obj, ResetType type)
 {
-    AspeedI2CBus *s = ASPEED_I2C_BUS(dev);
+    AspeedI2CBus *s = ASPEED_I2C_BUS(obj);
 
     memset(s->regs, 0, sizeof(s->regs));
     s->pending_intr_sts = 0;
     i2c_end_transfer(s->bus);
+    /*
+     * I2CC_VERSION_CTRL resets to all-ones. FUNC_CFG_DMA_EN is therefore set,
+     * so master DMA targets DRAM unless the guest clears it to select buffer
+     * mode. Guests unaware of buffer mode never touch this register and keep
+     * doing DRAM DMA.
+     */
+    s->regs[R_I2CC_VERSION_CTRL] = 0xffffffff;
 }
 
 static void aspeed_i2c_bus_realize(DeviceState *dev, Error **errp)
@@ -1556,19 +1619,13 @@ static const Property aspeed_i2c_bus_properties[] = {
 static void aspeed_i2c_bus_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    ResettableClass *rc = RESETTABLE_CLASS(klass);
 
     dc->desc = "Aspeed I2C Bus";
     dc->realize = aspeed_i2c_bus_realize;
-    device_class_set_legacy_reset(dc, aspeed_i2c_bus_reset);
+    rc->phases.hold = aspeed_i2c_bus_reset_hold;
     device_class_set_props(dc, aspeed_i2c_bus_properties);
 }
-
-static const TypeInfo aspeed_i2c_bus_info = {
-    .name           = TYPE_ASPEED_I2C_BUS,
-    .parent         = TYPE_SYS_BUS_DEVICE,
-    .instance_size  = sizeof(AspeedI2CBus),
-    .class_init     = aspeed_i2c_bus_class_init,
-};
 
 static qemu_irq aspeed_2400_i2c_bus_get_irq(AspeedI2CBus *bus)
 {
@@ -1603,12 +1660,6 @@ static void aspeed_2400_i2c_class_init(ObjectClass *klass, const void *data)
     aic->mem_size = 0x1000;
 }
 
-static const TypeInfo aspeed_2400_i2c_info = {
-    .name = TYPE_ASPEED_2400_I2C,
-    .parent = TYPE_ASPEED_I2C,
-    .class_init = aspeed_2400_i2c_class_init,
-};
-
 static qemu_irq aspeed_2500_i2c_bus_get_irq(AspeedI2CBus *bus)
 {
     return bus->controller->irq;
@@ -1636,13 +1687,8 @@ static void aspeed_2500_i2c_class_init(ObjectClass *klass, const void *data)
     aic->check_sram = true;
     aic->has_dma = true;
     aic->mem_size = 0x1000;
+    aic->dma_addr_lo_mask = 0x3ffffffc;
 }
-
-static const TypeInfo aspeed_2500_i2c_info = {
-    .name = TYPE_ASPEED_2500_I2C,
-    .parent = TYPE_ASPEED_I2C,
-    .class_init = aspeed_2500_i2c_class_init,
-};
 
 static qemu_irq aspeed_2600_i2c_bus_get_irq(AspeedI2CBus *bus)
 {
@@ -1665,13 +1711,8 @@ static void aspeed_2600_i2c_class_init(ObjectClass *klass, const void *data)
     aic->bus_pool_base = aspeed_2500_i2c_bus_pool_base;
     aic->has_dma = true;
     aic->mem_size = 0x1000;
+    aic->dma_addr_lo_mask = 0x7fffffff;
 }
-
-static const TypeInfo aspeed_2600_i2c_info = {
-    .name = TYPE_ASPEED_2600_I2C,
-    .parent = TYPE_ASPEED_I2C,
-    .class_init = aspeed_2600_i2c_class_init,
-};
 
 static void aspeed_1030_i2c_class_init(ObjectClass *klass, const void *data)
 {
@@ -1689,13 +1730,36 @@ static void aspeed_1030_i2c_class_init(ObjectClass *klass, const void *data)
     aic->bus_pool_base = aspeed_2500_i2c_bus_pool_base;
     aic->has_dma = true;
     aic->mem_size = 0x10000;
+    aic->dma_addr_lo_mask = 0x7fffffff;
 }
 
-static const TypeInfo aspeed_1030_i2c_info = {
-    .name = TYPE_ASPEED_1030_I2C,
-    .parent = TYPE_ASPEED_I2C,
-    .class_init = aspeed_1030_i2c_class_init,
-};
+static void aspeed_1040_i2c_class_init(ObjectClass *klass, const void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+    AspeedI2CClass *aic = ASPEED_I2C_CLASS(klass);
+
+    dc->desc = "ASPEED 1040 I2C Controller";
+
+    /*
+     * AST1040 reuses the AST2700 I2C controller implementation since
+     * the AST1040 is compatible with AST2700. AST1040 has 14 I2C buses,
+     * and its HyperRAM is limited to 16 MiB, so the DMA low address
+     * mask is restricted accordingly.
+     */
+    aic->num_busses = 14;
+    aic->reg_size = 0xa0;
+    aic->reg_gap_size = 0x60;
+    aic->gap = -1; /* no gap */
+    aic->bus_get_irq = aspeed_2600_i2c_bus_get_irq;
+    aic->pool_size = 0x40;
+    aic->pool_gap_size = 0xc0;
+    aic->pool_base = 0x1c0;
+    aic->bus_pool_base = aspeed_2500_i2c_bus_pool_base;
+    aic->has_dma = true;
+    aic->mem_size = 0x2000;
+    aic->has_dma64 = true;
+    aic->dma_addr_lo_mask = 0x00ffffff;
+}
 
 static void aspeed_2700_i2c_class_init(ObjectClass *klass, const void *data)
 {
@@ -1709,34 +1773,71 @@ static void aspeed_2700_i2c_class_init(ObjectClass *klass, const void *data)
     aic->reg_gap_size = 0x60;
     aic->gap = -1; /* no gap */
     aic->bus_get_irq = aspeed_2600_i2c_bus_get_irq;
-    aic->pool_size = 0x20;
-    aic->pool_gap_size = 0xe0;
-    aic->pool_base = 0x1a0;
+    aic->pool_size = 0x40;
+    aic->pool_gap_size = 0xc0;
+    aic->pool_base = 0x1c0;
     aic->bus_pool_base = aspeed_2500_i2c_bus_pool_base;
     aic->has_dma = true;
     aic->mem_size = 0x2000;
     aic->has_dma64 = true;
+    aic->dma_addr_lo_mask = 0xffffffff;
 }
 
-static const TypeInfo aspeed_2700_i2c_info = {
-    .name = TYPE_ASPEED_2700_I2C,
-    .parent = TYPE_ASPEED_I2C,
-    .class_init = aspeed_2700_i2c_class_init,
+static const TypeInfo aspeed_i2c_types[] = {
+    {
+        .name           = TYPE_ASPEED_I2C_BUS,
+        .parent         = TYPE_SYS_BUS_DEVICE,
+        .instance_size  = sizeof(AspeedI2CBus),
+        .class_init     = aspeed_i2c_bus_class_init,
+    },
+    {
+        .name           = TYPE_ASPEED_I2C_BUS_SLAVE,
+        .parent         = TYPE_I2C_SLAVE,
+        .instance_size  = sizeof(AspeedI2CBusSlave),
+        .class_init     = aspeed_i2c_bus_slave_class_init,
+    },
+    {
+        .name          = TYPE_ASPEED_I2C,
+        .parent        = TYPE_SYS_BUS_DEVICE,
+        .instance_init = aspeed_i2c_instance_init,
+        .instance_size = sizeof(AspeedI2CState),
+        .class_init    = aspeed_i2c_class_init,
+        .class_size = sizeof(AspeedI2CClass),
+        .abstract   = true,
+    },
+    {
+        .name = TYPE_ASPEED_1030_I2C,
+        .parent = TYPE_ASPEED_I2C,
+        .class_init = aspeed_1030_i2c_class_init,
+    },
+    {
+        .name = TYPE_ASPEED_1040_I2C,
+        .parent = TYPE_ASPEED_I2C,
+        .class_init = aspeed_1040_i2c_class_init,
+    },
+    {
+        .name = TYPE_ASPEED_2400_I2C,
+        .parent = TYPE_ASPEED_I2C,
+        .class_init = aspeed_2400_i2c_class_init,
+    },
+    {
+        .name = TYPE_ASPEED_2500_I2C,
+        .parent = TYPE_ASPEED_I2C,
+        .class_init = aspeed_2500_i2c_class_init,
+    },
+    {
+        .name = TYPE_ASPEED_2600_I2C,
+        .parent = TYPE_ASPEED_I2C,
+        .class_init = aspeed_2600_i2c_class_init,
+    },
+    {
+        .name = TYPE_ASPEED_2700_I2C,
+        .parent = TYPE_ASPEED_I2C,
+        .class_init = aspeed_2700_i2c_class_init,
+    }
 };
 
-static void aspeed_i2c_register_types(void)
-{
-    type_register_static(&aspeed_i2c_bus_info);
-    type_register_static(&aspeed_i2c_bus_slave_info);
-    type_register_static(&aspeed_i2c_info);
-    type_register_static(&aspeed_2400_i2c_info);
-    type_register_static(&aspeed_2500_i2c_info);
-    type_register_static(&aspeed_2600_i2c_info);
-    type_register_static(&aspeed_1030_i2c_info);
-    type_register_static(&aspeed_2700_i2c_info);
-}
-
-type_init(aspeed_i2c_register_types)
+DEFINE_TYPES(aspeed_i2c_types)
 
 
 I2CBus *aspeed_i2c_get_bus(AspeedI2CState *s, int busnr)

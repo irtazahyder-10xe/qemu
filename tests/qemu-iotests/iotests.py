@@ -941,17 +941,31 @@ class VM(qtest.QEMUQtestMachine):
             self.pause_drive(drive, "read_aio")
             self.pause_drive(drive, "write_aio")
             return
-        self.hmp(f'qemu-io {drive} "break {event} bp_{drive}"')
+        self.qmp_qemu_io(drive, f'break {event} bp_{drive}')
 
     def resume_drive(self, drive: str) -> None:
         """Resume drive r/w operations"""
-        self.hmp(f'qemu-io {drive} "remove_break bp_{drive}"')
+        self.qmp_qemu_io(drive, f'remove_break bp_{drive}')
 
     def hmp_qemu_io(self, drive: str, cmd: str,
                     use_log: bool = False, qdev: bool = False) -> QMPMessage:
         """Write to a given drive using an HMP command"""
         d = '-d ' if qdev else ''
         return self.hmp(f'qemu-io {d}{drive} "{cmd}"', use_log=use_log)
+
+    def qmp_qemu_io(self, drive: str, cmd: str,
+                    use_log: bool = False, qdev: bool = False) -> str:
+        """Write to a given drive using the x-qemu-io QMP command"""
+        kwargs: Dict[str, Any] = {'command': cmd}
+        if qdev:
+            kwargs['qdev'] = drive
+        else:
+            kwargs['device'] = drive
+        if use_log:
+            res = self.qmp_log('x-qemu-io', **kwargs)
+        else:
+            res = self.qmp('x-qemu-io', **kwargs)
+        return res.get('error', {}).get('desc', '')
 
     def flatten_qmp_object(self, obj, output=None, basestr=''):
         if output is None:
@@ -1442,6 +1456,15 @@ def _verify_formats(required_formats: Sequence[str] = ()) -> None:
         notrun(f'formats {usf_list} are not whitelisted')
 
 
+def _verify_hmp() -> None:
+    args = [qemu_prog] + qemu_opts + ['-M', 'none', '-monitor', 'stdio']
+    with subprocess.Popen(args, stdin=subprocess.PIPE,
+                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                          universal_newlines=True) as subp:
+        out, _ = subp.communicate('quit\n')
+    if 'HMP monitor is not available' in out:
+        notrun('HMP monitor not available')
+
 def _verify_virtio_blk() -> None:
     out = qemu_pipe('-M', 'none', '-device', 'help')
     if 'virtio-blk' not in out:
@@ -1603,6 +1626,22 @@ def skip_if_user_is_root(func):
             return func(*args, **kwargs)
     return func_wrapper
 
+def skip_flaky(bugurl):
+    '''Skip Test Decorator
+       Always skips test due to unreliable design.
+       Requires a bug report URL for historical record.'''
+    def skip_test_decorator(func):
+        def func_wrapper(*args, **kwargs):
+            if os.environ.get("QEMU_TEST_FLAKY_TESTS", None) is None:
+                case_notrun(
+                    ('{}: test is flaky (see {}) and $QEMU_TEST_FLAKY_TESTS ' +
+                     'is not set').format(args[0], bugurl))
+                return None
+            else:
+                return func(*args, **kwargs)
+        return func_wrapper
+    return skip_test_decorator
+
 # We need to filter out the time taken from the output so that
 # qemu-iotest can reliably diff the results against master output,
 # and hide skipped tests from the reference output.
@@ -1664,7 +1703,8 @@ def execute_setup_common(supported_fmts: Sequence[str] = (),
                          supported_protocols: Sequence[str] = (),
                          unsupported_protocols: Sequence[str] = (),
                          required_fmts: Sequence[str] = (),
-                         unsupported_imgopts: Sequence[str] = ()) -> bool:
+                         unsupported_imgopts: Sequence[str] = (),
+                         require_hmp: bool = False) -> bool:
     """
     Perform necessary setup for either script-style or unittest-style tests.
 
@@ -1685,6 +1725,8 @@ def execute_setup_common(supported_fmts: Sequence[str] = (),
     _verify_formats(required_fmts)
     _verify_virtio_blk()
     _verify_imgopts(unsupported_imgopts)
+    if require_hmp:
+        _verify_hmp()
 
     return debug
 
