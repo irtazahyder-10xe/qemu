@@ -19,11 +19,15 @@
 #ifndef HW_RISCV_VIRT_H
 #define HW_RISCV_VIRT_H
 
+#include <pthread.h>
+
+#include "chardev/char-fe.h"
 #include "hw/core/boards.h"
 #include "hw/riscv/riscv_hart.h"
 #include "hw/core/sysbus.h"
 #include "hw/block/flash.h"
 #include "hw/intc/riscv_imsic.h"
+#include "hw/riscv/riscv_qemu_rtl_intf.h"
 
 #define VIRT_CPUS_MAX_BITS             9
 #define VIRT_CPUS_MAX                  (1 << VIRT_CPUS_MAX_BITS)
@@ -64,6 +68,8 @@ struct RISCVVirtState {
     struct GPEXHost *gpex_host;
     OnOffAuto iommu_sys;
     uint16_t pci_iommu_bdf;
+
+    CharFrontend axi4_fe;
 };
 
 enum {

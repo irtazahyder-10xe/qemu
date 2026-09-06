@@ -22,6 +22,7 @@
 #include "hw/pci/pci_bus.h"
 #include "hw/pci/pci_device.h"
 #include "hw/core/qdev-properties.h"
+#include "hw/core/qdev-properties-system.h"
 #include "hw/riscv/riscv_hart.h"
 #include "migration/vmstate.h"
 #include "qapi/error.h"
@@ -29,11 +30,16 @@
 #include "qemu/target-info.h"
 #include "qemu/bitops.h"
 
+#include "chardev/char-fe.h"
 #include "cpu_bits.h"
 #include "riscv-iommu.h"
 #include "riscv-iommu-bits.h"
 #include "riscv-iommu-hpm.h"
+#include "riscv_qemu_rtl_intf.h"
+#include "system/memory.h"
 #include "trace.h"
+
+#include "riscv_qemu_rtl_intf.h"
 
 #define LIMIT_CACHE_CTX               (1U << 7)
 #define LIMIT_CACHE_IOT               (1U << 20)
@@ -74,6 +80,7 @@ struct RISCVIOMMUEntry {
 /* IOMMU index for transactions without process_id specified. */
 #define RISCV_IOMMU_NOPROCID 0
 
+/* QEMU IOMMU */
 static uint8_t riscv_iommu_get_icvec_vector(uint32_t icvec, uint32_t vec_type)
 {
     switch (vec_type) {
@@ -1558,6 +1565,8 @@ static RISCVIOMMUTransTag riscv_iommu_get_transtag(RISCVIOMMUContext *ctx)
     }
 }
 
+/* This function should never be invoked when RTL is being used as IOMMU */
+/* This function only sets iotlb values when there is a cache hit */
 static int riscv_iommu_translate(RISCVIOMMUState *s, RISCVIOMMUContext *ctx,
     IOMMUTLBEntry *iotlb, bool enable_cache)
 {
@@ -2213,163 +2222,169 @@ static MemTxResult riscv_iommu_mmio_write(void *opaque, hwaddr addr,
                                           uint64_t data, unsigned size,
                                           MemTxAttrs attrs)
 {
-    riscv_iommu_process_fn *process_fn = NULL;
+    /* BYPASS */
+    // riscv_iommu_process_fn *process_fn = NULL;
+    // RISCVIOMMUState *s = opaque;
+    // uint32_t regb = addr & ~3;
+    // uint32_t busy = 0;
+    // uint64_t val = 0;
+    // bool cy_inh = false;
+
+    // if ((addr & (size - 1)) != 0) {
+    //     /* Unsupported MMIO alignment or access size */
+    //     return MEMTX_ERROR;
+    // }
+
+    // if (addr + size > RISCV_IOMMU_REG_MSI_CONFIG) {
+    //     /* Unsupported MMIO access location. */
+    //     return MEMTX_ACCESS_ERROR;
+    // }
+
+    // /* Track actionable MMIO write. */
+    // switch (regb) {
+    // case RISCV_IOMMU_REG_DDTP:
+    // case RISCV_IOMMU_REG_DDTP + 4:
+    //     process_fn = riscv_iommu_process_ddtp;
+    //     regb = RISCV_IOMMU_REG_DDTP;
+    //     busy = RISCV_IOMMU_DDTP_BUSY;
+    //     break;
+
+    // case RISCV_IOMMU_REG_CQT:
+    //     process_fn = riscv_iommu_process_cq_tail;
+    //     break;
+
+    // case RISCV_IOMMU_REG_CQCSR:
+    //     process_fn = riscv_iommu_process_cq_control;
+    //     busy = RISCV_IOMMU_CQCSR_BUSY;
+    //     break;
+
+    // case RISCV_IOMMU_REG_FQCSR:
+    //     process_fn = riscv_iommu_process_fq_control;
+    //     busy = RISCV_IOMMU_FQCSR_BUSY;
+    //     break;
+
+    // case RISCV_IOMMU_REG_PQCSR:
+    //     process_fn = riscv_iommu_process_pq_control;
+    //     busy = RISCV_IOMMU_PQCSR_BUSY;
+    //     break;
+
+    // case RISCV_IOMMU_REG_ICVEC:
+    // case RISCV_IOMMU_REG_IPSR:
+    //     /*
+    //      * ICVEC and IPSR have special read/write procedures. We'll
+    //      * call their respective helpers and exit.
+    //      */
+    //     riscv_iommu_write_reg_val(s, &val, addr, size, data);
+
+    //     /*
+    //      * 'val' is stored as LE. Switch to host endianess
+    //      * before using it.
+    //      */
+    //     val = le64_to_cpu(val);
+
+    //     if (regb == RISCV_IOMMU_REG_ICVEC) {
+    //         riscv_iommu_update_icvec(s, val);
+    //     } else {
+    //         riscv_iommu_update_ipsr(s, val);
+    //     }
+
+    //     return MEMTX_OK;
+
+    // case RISCV_IOMMU_REG_TR_REQ_CTL:
+    //     process_fn = riscv_iommu_process_dbg;
+    //     regb = RISCV_IOMMU_REG_TR_REQ_CTL;
+    //     busy = RISCV_IOMMU_TR_REQ_CTL_GO_BUSY;
+    //     break;
+
+    // case RISCV_IOMMU_REG_IOCOUNTINH:
+    //     if (addr != RISCV_IOMMU_REG_IOCOUNTINH) {
+    //         break;
+    //     }
+    //     /* Store previous value of CY bit. */
+    //     cy_inh = !!(riscv_iommu_reg_get32(s, RISCV_IOMMU_REG_IOCOUNTINH) &
+    //         RISCV_IOMMU_IOCOUNTINH_CY);
+    //     break;
+
+
+    // default:
+    //     break;
+    // }
+
+    // /*
+    //  * Registers update might be not synchronized with core logic.
+    //  * If system software updates register when relevant BUSY bit
+    //  * is set IOMMU behavior of additional writes to the register
+    //  * is UNSPECIFIED.
+    //  */
+    // riscv_iommu_write_reg_val(s, &s->regs_rw[addr], addr, size, data);
+
+    // /* Busy flag update, MSB 4-byte register. */
+    // if (busy) {
+    //     uint32_t rw = ldl_le_p(&s->regs_rw[regb]);
+    //     stl_le_p(&s->regs_rw[regb], rw | busy);
+    // }
+
+    // /* Process HPM writes and update any internal state if needed. */
+    // if (regb >= RISCV_IOMMU_REG_IOCOUNTOVF &&
+    //     regb <= (RISCV_IOMMU_REG_IOHPMEVT(RISCV_IOMMU_IOCOUNT_NUM) + 4)) {
+    //     riscv_iommu_process_hpm_writes(s, regb, cy_inh);
+    // }
+
+    // if (process_fn) {
+    //     process_fn(s);
+    // }
+
     RISCVIOMMUState *s = opaque;
-    uint32_t regb = addr & ~3;
-    uint32_t busy = 0;
-    uint64_t val = 0;
-    bool cy_inh = false;
-
-    if ((addr & (size - 1)) != 0) {
-        /* Unsupported MMIO alignment or access size */
-        return MEMTX_ERROR;
-    }
-
-    if (addr + size > RISCV_IOMMU_REG_MSI_CONFIG) {
-        /* Unsupported MMIO access location. */
-        return MEMTX_ACCESS_ERROR;
-    }
-
-    /* Track actionable MMIO write. */
-    switch (regb) {
-    case RISCV_IOMMU_REG_DDTP:
-    case RISCV_IOMMU_REG_DDTP + 4:
-        process_fn = riscv_iommu_process_ddtp;
-        regb = RISCV_IOMMU_REG_DDTP;
-        busy = RISCV_IOMMU_DDTP_BUSY;
-        break;
-
-    case RISCV_IOMMU_REG_CQT:
-        process_fn = riscv_iommu_process_cq_tail;
-        break;
-
-    case RISCV_IOMMU_REG_CQCSR:
-        process_fn = riscv_iommu_process_cq_control;
-        busy = RISCV_IOMMU_CQCSR_BUSY;
-        break;
-
-    case RISCV_IOMMU_REG_FQCSR:
-        process_fn = riscv_iommu_process_fq_control;
-        busy = RISCV_IOMMU_FQCSR_BUSY;
-        break;
-
-    case RISCV_IOMMU_REG_PQCSR:
-        process_fn = riscv_iommu_process_pq_control;
-        busy = RISCV_IOMMU_PQCSR_BUSY;
-        break;
-
-    case RISCV_IOMMU_REG_ICVEC:
-    case RISCV_IOMMU_REG_IPSR:
-        /*
-         * ICVEC and IPSR have special read/write procedures. We'll
-         * call their respective helpers and exit.
-         */
-        riscv_iommu_write_reg_val(s, &val, addr, size, data);
-
-        /*
-         * 'val' is stored as LE. Switch to host endianess
-         * before using it.
-         */
-        val = le64_to_cpu(val);
-
-        if (regb == RISCV_IOMMU_REG_ICVEC) {
-            riscv_iommu_update_icvec(s, val);
-        } else {
-            riscv_iommu_update_ipsr(s, val);
-        }
-
-        return MEMTX_OK;
-
-    case RISCV_IOMMU_REG_TR_REQ_CTL:
-        process_fn = riscv_iommu_process_dbg;
-        regb = RISCV_IOMMU_REG_TR_REQ_CTL;
-        busy = RISCV_IOMMU_TR_REQ_CTL_GO_BUSY;
-        break;
-
-    case RISCV_IOMMU_REG_IOCOUNTINH:
-        if (addr != RISCV_IOMMU_REG_IOCOUNTINH) {
-            break;
-        }
-        /* Store previous value of CY bit. */
-        cy_inh = !!(riscv_iommu_reg_get32(s, RISCV_IOMMU_REG_IOCOUNTINH) &
-            RISCV_IOMMU_IOCOUNTINH_CY);
-        break;
-
-
-    default:
-        break;
-    }
-
-    /*
-     * Registers update might be not synchronized with core logic.
-     * If system software updates register when relevant BUSY bit
-     * is set IOMMU behavior of additional writes to the register
-     * is UNSPECIFIED.
-     */
-    riscv_iommu_write_reg_val(s, &s->regs_rw[addr], addr, size, data);
-
-    /* Busy flag update, MSB 4-byte register. */
-    if (busy) {
-        uint32_t rw = ldl_le_p(&s->regs_rw[regb]);
-        stl_le_p(&s->regs_rw[regb], rw | busy);
-    }
-
-    /* Process HPM writes and update any internal state if needed. */
-    if (regb >= RISCV_IOMMU_REG_IOCOUNTOVF &&
-        regb <= (RISCV_IOMMU_REG_IOHPMEVT(RISCV_IOMMU_IOCOUNT_NUM) + 4)) {
-        riscv_iommu_process_hpm_writes(s, regb, cy_inh);
-    }
-
-    if (process_fn) {
-        process_fn(s);
-    }
-
-    return MEMTX_OK;
+    return rtl_mmio_rmw(addr, AHB3L_HWRITE_WRITE, DOUBLE_ACCESS(size),
+                        data, NULL, &s->ahb3lite_fe);
 }
 
 static MemTxResult riscv_iommu_mmio_read(void *opaque, hwaddr addr,
     uint64_t *data, unsigned size, MemTxAttrs attrs)
 {
+    /* BYPASS */
+    // RISCVIOMMUState *s = opaque;
+    // uint64_t val = -1;
+    // uint8_t *ptr;
+
+    // if ((addr & (size - 1)) != 0) {
+    //     /* Unsupported MMIO alignment. */
+    //     return MEMTX_ERROR;
+    // }
+
+    // if (addr + size > RISCV_IOMMU_REG_MSI_CONFIG) {
+    //     return MEMTX_ACCESS_ERROR;
+    // }
+
+    // /* Compute cycle register value. */
+    // if ((addr & ~7) == RISCV_IOMMU_REG_IOHPMCYCLES) {
+    //     val = riscv_iommu_hpmcycle_read(s);
+    //     ptr = (uint8_t *)&val + (addr & 7);
+    // } else if ((addr & ~3) == RISCV_IOMMU_REG_IOCOUNTOVF) {
+    //     /*
+    //      * Software can read RISCV_IOMMU_REG_IOCOUNTOVF before timer
+    //      * callback completes. In which case CY_OF bit in
+    //      * RISCV_IOMMU_IOHPMCYCLES_OVF would be 0. Here we take the
+    //      * CY_OF bit state from RISCV_IOMMU_REG_IOHPMCYCLES register as
+    //      * it's not dependent over the timer callback and is computed
+    //      * from cycle overflow.
+    //      */
+    //     val = ldq_le_p(&s->regs_rw[addr]);
+    //     val |= (riscv_iommu_hpmcycle_read(s) & RISCV_IOMMU_IOHPMCYCLES_OVF)
+    //                ? RISCV_IOMMU_IOCOUNTOVF_CY
+    //                : 0;
+    //     ptr = (uint8_t *)&val + (addr & 3);
+    // } else {
+    //     ptr = &s->regs_rw[addr];
+    // }
+
+    // val = ldn_le_p(ptr, size);
+
+    // *data = val;
+
     RISCVIOMMUState *s = opaque;
-    uint64_t val = -1;
-    uint8_t *ptr;
-
-    if ((addr & (size - 1)) != 0) {
-        /* Unsupported MMIO alignment. */
-        return MEMTX_ERROR;
-    }
-
-    if (addr + size > RISCV_IOMMU_REG_MSI_CONFIG) {
-        return MEMTX_ACCESS_ERROR;
-    }
-
-    /* Compute cycle register value. */
-    if ((addr & ~7) == RISCV_IOMMU_REG_IOHPMCYCLES) {
-        val = riscv_iommu_hpmcycle_read(s);
-        ptr = (uint8_t *)&val + (addr & 7);
-    } else if ((addr & ~3) == RISCV_IOMMU_REG_IOCOUNTOVF) {
-        /*
-         * Software can read RISCV_IOMMU_REG_IOCOUNTOVF before timer
-         * callback completes. In which case CY_OF bit in
-         * RISCV_IOMMU_IOHPMCYCLES_OVF would be 0. Here we take the
-         * CY_OF bit state from RISCV_IOMMU_REG_IOHPMCYCLES register as
-         * it's not dependent over the timer callback and is computed
-         * from cycle overflow.
-         */
-        val = ldq_le_p(&s->regs_rw[addr]);
-        val |= (riscv_iommu_hpmcycle_read(s) & RISCV_IOMMU_IOHPMCYCLES_OVF)
-                   ? RISCV_IOMMU_IOCOUNTOVF_CY
-                   : 0;
-        ptr = (uint8_t *)&val + (addr & 3);
-    } else {
-        ptr = &s->regs_rw[addr];
-    }
-
-    val = ldn_le_p(ptr, size);
-
-    *data = val;
-
-    return MEMTX_OK;
+    return rtl_mmio_rmw(addr, AHB3L_HWRITE_READ, DOUBLE_ACCESS(size),
+                        0, data, &s->ahb3lite_fe);
 }
 
 static const MemoryRegionOps riscv_iommu_mmio_ops = {
@@ -2476,6 +2491,8 @@ static void riscv_iommu_instance_init(Object *obj)
 
     s->iommus.le_next = NULL;
     s->iommus.le_prev = NULL;
+    // Setting base IOMMU mode to BARE by default
+    s->enable_off = false;
     QLIST_INIT(&s->spaces);
 }
 
@@ -2603,6 +2620,11 @@ static void riscv_iommu_realize(DeviceState *dev, Error **errp)
             timer_new_ns(QEMU_CLOCK_VIRTUAL, riscv_iommu_hpm_timer_cb, s);
         s->hpm_event_ctr_map = g_hash_table_new(g_direct_hash, g_direct_equal);
     }
+
+    /* Initializing ahb3lite frontend */
+    // qemu_chr_fe_init(&s->ahb3lite_fe, s->ahb3lite, errp);
+    qemu_chr_fe_set_handlers(&s->ahb3lite_fe, NULL, NULL, ahb3lite_event_handler,
+                             NULL, &s->ahb3lite_fe, NULL, true);
 }
 
 static void riscv_iommu_unrealize(DeviceState *dev)
@@ -2664,6 +2686,7 @@ static const Property riscv_iommu_properties[] = {
     DEFINE_PROP_BOOL("g-stage", RISCVIOMMUState, enable_g_stage, TRUE),
     DEFINE_PROP_LINK("downstream-mr", RISCVIOMMUState, target_mr,
         TYPE_MEMORY_REGION, MemoryRegion *),
+    DEFINE_PROP_CHR("ahb3lite", RISCVIOMMUState, ahb3lite_fe),
     DEFINE_PROP_UINT8("hpm-counters", RISCVIOMMUState, hpm_cntrs,
                       RISCV_IOMMU_IOCOUNT_NUM),
 };
@@ -2701,14 +2724,15 @@ static IOMMUTLBEntry riscv_iommu_memory_region_translate(
     IOMMUAccessFlags flag, int iommu_idx)
 {
     RISCVIOMMUSpace *as = container_of(iommu_mr, RISCVIOMMUSpace, iova_mr);
-    RISCVIOMMUContext *ctx;
-    void *ref;
     IOMMUTLBEntry iotlb = {
         .iova = addr,
         .target_as = as->iommu->target_as,
         .addr_mask = ~0ULL,
         .perm = flag,
     };
+    /* Bypassed */
+    RISCVIOMMUContext *ctx;
+    void *ref;
 
     ctx = riscv_iommu_ctx(as->iommu, as->devid, iommu_idx, &ref);
     if (ctx == NULL) {
@@ -2728,6 +2752,10 @@ static IOMMUTLBEntry riscv_iommu_memory_region_translate(
                           iotlb.translated_addr);
 
     riscv_iommu_ctx_put(as->iommu, ref);
+
+    /* The address mask depends on which level the PTE was found i.e. superpage or 4KB page
+     * defaulting the mask to 4KB page*/
+    iotlb.addr_mask = ~TARGET_PAGE_MASK;
 
     return iotlb;
 }

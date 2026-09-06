@@ -417,3 +417,9 @@ iommu_testdev_dma_read(uint64_t gva, uint32_t len) "gva=0x%" PRIx64 " len=%u"
 iommu_testdev_dma_verify(uint32_t expected, uint32_t actual) "expected=0x%x actual=0x%x"
 iommu_testdev_dma_result(uint32_t result) "DMA completed result=0x%x"
 iommu_testdev_dma_armed(bool armed) "armed=%d"
+
+# custom edu.c
+edu_msi(uint64_t id, uint64_t addr, uint32_t data) "[MSI] ID: 0x%"PRIx64" ADDR: 0x%"PRIx64" DATA: 0%"PRIu32
+edu_dma(uint64_t id, uint64_t addr, const char *op) "[DMA] ID: 0x%"PRIx64" ADDR: 0x%"PRIx64" OPERATION: %s"
+edu_perform_dma_ghash_entry(const char *msi, uint64_t src, uint64_t dst, uint64_t cnt, uint64_t cmd, uint64_t addr, uint32_t data) "GHASH %s: dma.src 0x%"PRIx64" dma.dst 0x%"PRIx64" dma.cnt 0x%"PRIx64" dma.cmd 0x%"PRIx64" msi.addr 0x%"PRIx64" msi.data %"PRIu32
+edu_ghash_entry(const char *msi, uint64_t src, uint64_t dst, uint64_t cnt, uint64_t cmd, uint64_t addr, uint32_t data) "GHASH %s: dma.src 0x%"PRIx64" dma.dst 0x%"PRIx64" dma.cnt 0x%"PRIx64" dma.cmd 0x%"PRIx64" msi.addr 0x%"PRIx64" msi.data %"PRIu32

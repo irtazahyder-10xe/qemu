@@ -28,58 +28,61 @@
 #include "hw/pci/pci.h"
 #include "hw/pci/msi.h"
 #include "qemu/timer.h"
+#include "qemu/thread.h"
 #include "qom/object.h"
 #include "qemu/main-loop.h" /* iothread mutex */
-#include "qemu/module.h"
-#include "qapi/visitor.h"
-
-#define TYPE_PCI_EDU_DEVICE "edu"
-typedef struct EduState EduState;
-DECLARE_INSTANCE_CHECKER(EduState, EDU,
-                         TYPE_PCI_EDU_DEVICE)
-
-#define FACT_IRQ        0x00000001
-#define DMA_IRQ         0x00000100
-
-#define DMA_START       0x40000
-#define DMA_SIZE        4096
-
-struct EduState {
-    PCIDevice pdev;
-    MemoryRegion mmio;
-
-    QemuThread thread;
-    QemuMutex thr_mutex;
-    QemuCond thr_cond;
-    bool stopping;
-
-    uint32_t addr4;
-    uint32_t fact;
-#define EDU_STATUS_COMPUTING    0x01
-#define EDU_STATUS_IRQFACT      0x80
-    uint32_t status;
-
-    uint32_t irq_status;
-
-#define EDU_DMA_RUN             0x1
-#define EDU_DMA_DIR(cmd)        (((cmd) & 0x2) >> 1)
-# define EDU_DMA_FROM_PCI       0
-# define EDU_DMA_TO_PCI         1
-#define EDU_DMA_IRQ             0x4
-    struct dma_state {
-        dma_addr_t src;
-        dma_addr_t dst;
-        dma_addr_t cnt;
-        dma_addr_t cmd;
-    } dma;
-    QEMUTimer dma_timer;
-    char dma_buf[DMA_SIZE];
-    uint64_t dma_mask;
-};
+#include "chardev/char.h"
+#include "chardev/char-fe.h"
+#include "hw/core/qdev-properties.h"
+#include "hw/misc/edu.h"
+#include "hw/riscv/riscv_qemu_rtl_intf.h"
+#include "trace.h"
 
 static bool edu_msi_enabled(EduState *edu)
 {
     return msi_enabled(&edu->pdev);
+}
+
+static inline unsigned int msi_nr_vectors(uint16_t flags)
+{
+    return 1U <<
+        ((flags & PCI_MSI_FLAGS_QSIZE) >> ctz32(PCI_MSI_FLAGS_QSIZE));
+}
+
+static inline uint8_t msi_flags_off(const PCIDevice* dev)
+{
+    return dev->msi_cap + PCI_MSI_FLAGS;
+}
+
+static inline uint8_t msi_pending_off(const PCIDevice* dev, bool msi64bit)
+{
+    return dev->msi_cap + (msi64bit ? PCI_MSI_PENDING_64 : PCI_MSI_PENDING_32);
+}
+
+static void edu_msi_trans(PCIDevice *dev, unsigned int vector)
+{
+    EduState *edu = EDU(dev);
+    uint16_t flags = pci_get_word(dev->config + msi_flags_off(dev));
+    bool msi64bit = flags & PCI_MSI_FLAGS_64BIT;
+    unsigned int nr_vectors = msi_nr_vectors(flags);
+    MSIMessage msg;
+    uint64_t id;
+
+    assert(vector < nr_vectors);
+    if (msi_is_masked(dev, vector)) {
+        assert(flags & PCI_MSI_FLAGS_MASKBIT);
+        pci_long_test_and_set_mask(
+            dev->config + msi_pending_off(dev, msi64bit), 1U << vector);
+        return;
+    }
+    msg = msi_get_message(&edu->pdev, 0);
+
+    edu_ghash_entry_s *value = malloc(sizeof(edu_ghash_entry_s));
+    memcpy(&value->msi, &msg, sizeof(MSIMessage));
+    value->is_msi = true;
+    id = rtl_trans_reqt(msg.address, true, false, 8, false, 0, &edu->lti_fe);
+    g_hash_table_insert(edu->edu_state_history, GINT_TO_POINTER(id), value);
+    trace_edu_msi(id, msg.address, msg.data);
 }
 
 static void edu_raise_irq(EduState *edu, uint32_t val)
@@ -87,7 +90,7 @@ static void edu_raise_irq(EduState *edu, uint32_t val)
     edu->irq_status |= val;
     if (edu->irq_status) {
         if (edu_msi_enabled(edu)) {
-            msi_notify(&edu->pdev, 0);
+            edu_msi_trans(&edu->pdev, 0);
         } else {
             pci_set_irq(&edu->pdev, 1);
         }
@@ -104,7 +107,7 @@ static void edu_lower_irq(EduState *edu, uint32_t val)
 }
 
 static void edu_check_range(uint64_t xfer_start, uint64_t xfer_size,
-                uint64_t dma_start, uint64_t dma_size)
+                            uint64_t dma_start, uint64_t dma_size)
 {
     uint64_t xfer_end = xfer_start + xfer_size;
     uint64_t dma_end = dma_start + dma_size;
@@ -137,37 +140,97 @@ static dma_addr_t edu_clamp_addr(const EduState *edu, dma_addr_t addr)
     return res;
 }
 
+
+void edu_perform_dma(void *opaque, lti_LR_s resp)
+{
+    EduState *edu = opaque;
+    edu_ghash_entry_s *entry = g_hash_table_lookup(edu->edu_state_history,
+                                                   GINT_TO_POINTER(resp.id));
+    if (entry == NULL) {
+        return;
+    }
+
+    trace_edu_perform_dma_ghash_entry(entry->is_msi ? "MSI" : "DMA",
+                                      entry->dma.src,
+                                      entry->dma.dst,
+                                      entry->dma.cnt,
+                                      entry->dma.cmd,
+                                      entry->msi.address,
+                                      entry->msi.data);
+
+    /* Deasserting EDU DMA bit and consuming LTI request if ABORT received */
+    if (resp.resp == LTI_RESP_FAULT_ABORT)
+    {
+        edu->dma.cmd = ~EDU_DMA_RUN;
+        goto cleanup;
+    }
+
+    if (entry->is_msi) {
+        /* MSI translation */
+        entry->msi.address = resp.spa;
+        msi_send_message(PCI_DEVICE(edu), entry->msi);
+        goto cleanup;
+    } else {
+        /* DMA transaction */
+        if (!(entry->dma.cmd & EDU_DMA_RUN)) {
+            /**
+             * If LTI response received but EDU unable to perform DMA,
+             * remove request from DMA history
+             */
+            goto cleanup;
+        }
+
+        // EDU_DMA_FROM_PCI = 0, EDU_DMA_TO_PCI = 1
+        if (EDU_DMA_DIR(entry->dma.cmd) == EDU_DMA_FROM_PCI) {
+            uint64_t dst = entry->dma.dst;
+            edu_check_range(dst, entry->dma.cnt, DMA_START, DMA_SIZE);
+            dst -= DMA_START;
+            pci_dma_read(&edu->pdev, resp.spa, edu->dma_buf + dst, entry->dma.cnt);
+        } else {
+            uint64_t src = entry->dma.src;
+            edu_check_range(src, entry->dma.cnt, DMA_START, DMA_SIZE);
+            src -= DMA_START;
+            pci_dma_write(&edu->pdev, resp.spa, edu->dma_buf + src, entry->dma.cnt);
+        }
+
+        edu->dma.cmd &= ~EDU_DMA_RUN;
+        if (entry->dma.cmd & EDU_DMA_IRQ) {
+            edu_raise_irq(edu, DMA_IRQ);
+        }
+    }
+cleanup:
+    /* Removing entry from hashtable */
+    g_hash_table_remove(edu->edu_state_history, GINT_TO_POINTER(resp.id));
+}
+
 static void edu_dma_timer(void *opaque)
 {
     EduState *edu = opaque;
-    bool raise_irq = false;
+    uint64_t id;
+    // EDU_DMA_FROM_PCI = 0, EDU_DMA_TO_PCI = 1
+    bool dma_to_pci = EDU_DMA_DIR(edu->dma.cmd);
 
     if (!(edu->dma.cmd & EDU_DMA_RUN)) {
         return;
     }
 
-    if (EDU_DMA_DIR(edu->dma.cmd) == EDU_DMA_FROM_PCI) {
-        uint64_t dst = edu->dma.dst;
-        edu_check_range(dst, edu->dma.cnt, DMA_START, DMA_SIZE);
-        dst -= DMA_START;
-        pci_dma_read(&edu->pdev, edu_clamp_addr(edu, edu->dma.src),
-                edu->dma_buf + dst, edu->dma.cnt);
-    } else {
-        uint64_t src = edu->dma.src;
-        edu_check_range(src, edu->dma.cnt, DMA_START, DMA_SIZE);
-        src -= DMA_START;
-        pci_dma_write(&edu->pdev, edu_clamp_addr(edu, edu->dma.dst),
-                edu->dma_buf + src, edu->dma.cnt);
-    }
-
-    edu->dma.cmd &= ~EDU_DMA_RUN;
-    if (edu->dma.cmd & EDU_DMA_IRQ) {
-        raise_irq = true;
-    }
-
-    if (raise_irq) {
-        edu_raise_irq(edu, DMA_IRQ);
-    }
+    /* Send DMA request to RTL */
+    edu_ghash_entry_s *value = malloc(sizeof(edu_ghash_entry_s));
+    memcpy(&value->dma, &edu->dma, sizeof(dma_state));
+    value->is_msi = false;
+    id = rtl_trans_reqt(edu_clamp_addr(edu, dma_to_pci ? edu->dma.dst : edu->dma.src),
+                        EDU_DMA_DIR(edu->dma.cmd) == EDU_DMA_TO_PCI, false, 8, false, 0,
+                        &edu->lti_fe);
+    g_hash_table_insert(edu->edu_state_history, GINT_TO_POINTER(id), value);
+    trace_edu_dma(id, edu_clamp_addr(edu, dma_to_pci ? edu->dma.dst : edu->dma.src),
+                  EDU_DMA_DIR(edu->dma.cmd) == EDU_DMA_TO_PCI ? "WRITE" : "READ");
+    trace_edu_ghash_entry(value->is_msi ? "MSI" : "DMA",
+                          value->dma.src,
+                          value->dma.dst,
+                          value->dma.cnt,
+                          value->dma.cmd,
+                          value->msi.address,
+                          value->msi.data);
 }
 
 static void dma_rw(EduState *edu, bool write, dma_addr_t *val, dma_addr_t *dma,
@@ -384,9 +447,15 @@ static void pci_edu_realize(PCIDevice *pdev, Error **errp)
     qemu_thread_create(&edu->thread, "edu", edu_fact_thread,
                        edu, QEMU_THREAD_JOINABLE);
 
+    /* Initializing lti frontend */
+    qemu_chr_fe_init(&edu->lti_fe, edu->lti_chrdev, errp);
+    qemu_chr_fe_set_handlers(&edu->lti_fe, can_read_rtl_trans_resp,
+                             read_rtl_trans_resp, lti_event_handler,
+                             NULL, edu, NULL, true);
     memory_region_init_io(&edu->mmio, OBJECT(edu), &edu_mmio_ops, edu,
                     "edu-mmio", 1 * MiB);
     pci_register_bar(pdev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY, &edu->mmio);
+    edu->edu_state_history = g_hash_table_new_full(NULL, NULL, NULL, free);
 }
 
 static void pci_edu_uninit(PCIDevice *pdev)
@@ -406,6 +475,12 @@ static void pci_edu_uninit(PCIDevice *pdev)
     msi_uninit(pdev);
 }
 
+static void edu_instance_finalize(Object *obj)
+{
+    EduState *edu = EDU(obj);
+    g_hash_table_destroy(edu->edu_state_history);
+}
+
 static void edu_instance_init(Object *obj)
 {
     EduState *edu = EDU(obj);
@@ -413,6 +488,11 @@ static void edu_instance_init(Object *obj)
     edu->dma_mask = (1UL << 28) - 1;
     object_property_add_uint64_ptr(obj, "dma_mask",
                                    &edu->dma_mask, OBJ_PROP_FLAG_READWRITE);
+    // TODO: TYPE_CHARDEV -> TYPE_CHARDEV_MUX when using multiple devices
+    object_property_add_link(obj, "lti_intf", TYPE_CHARDEV,
+                             (Object **)&edu->lti_chrdev,
+                             qdev_prop_allow_set_link_before_realize,
+                             0);
 }
 
 static void edu_class_init(ObjectClass *class, const void *data)
@@ -435,6 +515,7 @@ static const TypeInfo edu_types[] = {
         .parent        = TYPE_PCI_DEVICE,
         .instance_size = sizeof(EduState),
         .instance_init = edu_instance_init,
+        .instance_finalize = edu_instance_finalize,
         .class_init    = edu_class_init,
         .interfaces    = (const InterfaceInfo[]) {
             { INTERFACE_CONVENTIONAL_PCI_DEVICE },
@@ -443,4 +524,4 @@ static const TypeInfo edu_types[] = {
     }
 };
 
-DEFINE_TYPES(edu_types)
+DEFINE_TYPES(edu_types);

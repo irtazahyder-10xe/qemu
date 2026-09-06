@@ -19,6 +19,8 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu/compiler.h"
+#include "qemu/main-loop.h"
 #include "qemu/units.h"
 #include "qemu/error-report.h"
 #include "qemu/guest-random.h"
@@ -58,6 +60,10 @@
 #include "qapi/qapi-visit-common.h"
 #include "hw/virtio/virtio-iommu.h"
 #include "hw/uefi/var-service-api.h"
+#include "chardev/char-fe.h"
+
+#include "riscv_qemu_rtl_intf.h"
+#include <signal.h>
 
 /* KVM AIA only supports APLIC MSI. APLIC Wired is always emulated by QEMU. */
 static bool virt_use_kvm_aia_aplic_imsic(RISCVVirtAIAType aia_type)
@@ -1737,9 +1743,13 @@ static void virt_machine_init(MachineState *machine)
         object_property_set_uint(OBJECT(iommu_sys), "pas-bits",
                                  riscv_is_32bit(&s->soc[0]) ? 34 : 56,
                                  &error_fatal);
-
         sysbus_realize_and_unref(SYS_BUS_DEVICE(iommu_sys), &error_fatal);
     }
+
+    qemu_chr_fe_init(&s->axi4_fe, serial_hd(1), &error_fatal);
+    qemu_chr_fe_set_handlers(&s->axi4_fe, rtl_can_dram_access,
+                             rtl_dram_access, axi4_event_handler,
+                             NULL, &s->axi4_fe, NULL, true);
 
     s->machine_done.notify = virt_machine_done;
     qemu_add_machine_init_done_notifier(&s->machine_done);
