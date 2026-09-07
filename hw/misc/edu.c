@@ -180,6 +180,7 @@ void edu_perform_dma(void *opaque, lti_LR_s resp)
         if (!(resp.mrif_fields & MRIF_VALID)) {
             /* MSI */
             entry->msi.address = resp.spa;
+            msi_send_message(PCI_DEVICE(edu), entry->msi);
         } else {
             /* MRIF */
             /* MRIF Address = concat(mrif_fields[58:55], spa) */
@@ -209,9 +210,21 @@ void edu_perform_dma(void *opaque, lti_LR_s resp)
             entry->msi.address = (resp.mrif_fields >> MRIF_NPPN_OFFSET) & MRIF_NPPN_MASK;
             entry->msi.address <<= 12;
             entry->msi.data = resp.mrif_fields & MRIF_NID_MASK;
-        }
 
-        msi_send_message(PCI_DEVICE(edu), entry->msi);
+            /**
+             * Writing NID to NPPN:
+             *
+             * NOTE: We don't care if the write is on a valid IMSIC or not.
+             * the AIA specification states: "Any page address must be accepted
+             * for NPPN" (Section 8.5, page 88)
+             */
+            address_space_stl_le(&address_space_memory,
+                                 entry->msi.address,
+                                 entry->msi.data, MEMTXATTRS_UNSPECIFIED, &result);
+
+            /* For MRIF, id shows whether store was successful or not */
+            trace_edu_msi(result == MEMTX_OK, entry->msi.address, entry->msi.data);
+        }
     } else {
         /* DMA transaction */
         if (!(entry->dma.cmd & EDU_DMA_RUN)) {
