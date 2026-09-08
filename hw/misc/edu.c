@@ -158,10 +158,12 @@ void edu_perform_dma(void *opaque, lti_LR_s resp)
                                       entry->msi.address,
                                       entry->msi.data);
 
-    /* Deasserting EDU DMA bit and consuming LTI request if ABORT received */
+    /* Discard LTI request if ABORT received on DMA response */
     if (resp.resp == LTI_RESP_FAULT_ABORT)
     {
-        edu->dma.cmd = ~EDU_DMA_RUN;
+        /* Deasserting EDU DMA bit ONLY when DMA transaction returned ABORT */
+        if (!entry->is_msi)
+            edu->dma.cmd = ~EDU_DMA_RUN;
         goto cleanup;
     }
 
@@ -169,7 +171,6 @@ void edu_perform_dma(void *opaque, lti_LR_s resp)
         /* MSI translation */
         entry->msi.address = resp.spa;
         msi_send_message(PCI_DEVICE(edu), entry->msi);
-        goto cleanup;
     } else {
         /* DMA transaction */
         if (!(entry->dma.cmd & EDU_DMA_RUN)) {
