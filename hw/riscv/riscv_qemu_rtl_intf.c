@@ -8,6 +8,8 @@
 
 #include "riscv_qemu_rtl_intf.h"
 
+QemuMutex iommu_debug_resp;
+
 void default_rtl_protocol_event_handler(void *opaque, QEMUChrEvent event, const char id_str[5])
 {
     CharFrontend *fe = opaque;
@@ -23,6 +25,7 @@ void default_rtl_protocol_event_handler(void *opaque, QEMUChrEvent event, const 
 
 void ahb3lite_event_handler(void *opaque, QEMUChrEvent event)
 {
+    qemu_mutex_init(&iommu_debug_resp);
     default_rtl_protocol_event_handler(opaque, event, "reqt");
 }
 
@@ -38,6 +41,8 @@ MemTxResult rtl_mmio_rmw(hwaddr addr, bool is_write, bool is_8bytes,
         /* Charbackend is not open */
         return MEMTX_ERROR;
     }
+
+    qemu_mutex_lock(&iommu_debug_resp);
 
     mtrans.hwrite = is_write;
     mtrans.hsize = is_8bytes ? 3 : 2;
@@ -61,6 +66,8 @@ MemTxResult rtl_mmio_rmw(hwaddr addr, bool is_write, bool is_8bytes,
 
     chardev_status = qemu_chr_fe_read_all(ahb_fe, (uint8_t*)&strans,
                                           sizeof(strans));
+
+    /* Wait for AXI4 to also complete if register was debug control register */
     if (chardev_status < 0) {
         return MEMTX_ERROR;
     }
@@ -77,6 +84,13 @@ MemTxResult rtl_mmio_rmw(hwaddr addr, bool is_write, bool is_8bytes,
         *rdata = strans.hrdata;
     }
 
+    /**
+     * If we are writing tr_req_ctl.Go/Busy, then do not issue another AHB
+     * request before all AXI4 transactions for reference model are completed.
+     */
+    if (addr != 608) {
+        qemu_mutex_unlock(&iommu_debug_resp);
+    }
     return MEMTX_OK;
 }
 
