@@ -11,10 +11,10 @@
 #include "qapi/error.h"
 #include "monitor/monitor.h"
 #include "monitor/hmp.h"
-#include "monitor/hmp-target.h"
 #include "system/hw_accel.h"
 #include "system/kvm.h"
 #include "system/xen.h"
+#include "system/mshv.h"
 #include "system/address-spaces.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/i386/apic_internal.h"
@@ -35,6 +35,8 @@ APICCommonClass *apic_get_class(Error **errp)
         apic_type = "xen-apic";
     } else if (whpx_irqchip_in_kernel()) {
         apic_type = "whpx-apic";
+    } else if (mshv_enabled()) {
+        apic_type = "mshv-apic";
     }
 
     return APIC_COMMON_CLASS(object_class_by_name(apic_type));
@@ -57,11 +59,7 @@ void x86_cpu_apic_create(X86CPU *cpu, Error **errp)
     cpu->apic_state->cpu = cpu;
     cpu->apic_state->apicbase = APIC_DEFAULT_ADDRESS | MSR_IA32_APICBASE_ENABLE;
 
-    /*
-     * apic_common_set_id needs to check if the CPU has x2APIC
-     * feature in case APIC ID >= 255, so we need to set cpu->apic_state->cpu
-     * before setting APIC ID
-     */
+    /* cpu must be set before realize, which validates the APIC ID */
     qdev_prop_set_uint32(DEVICE(cpu->apic_state), "id", cpu->apic_id);
 }
 
@@ -85,7 +83,8 @@ void x86_cpu_apic_realize(X86CPU *cpu, Error **errp)
      }
 }
 
-void hmp_info_local_apic(Monitor *mon, const QDict *qdict)
+#ifdef CONFIG_HMP
+void hmp_info_local_apic(MonitorHMP *hmp, const QDict *qdict)
 {
     CPUState *cs;
 
@@ -97,13 +96,14 @@ void hmp_info_local_apic(Monitor *mon, const QDict *qdict)
             cpu_synchronize_state(cs);
         }
     } else {
-        cs = mon_get_cpu(mon);
+        cs = monitor_hmp_get_cpu(hmp);
     }
 
 
     if (!cs) {
-        monitor_printf(mon, "No CPU available\n");
+        monitor_hmp_printf(hmp, "No CPU available\n");
         return;
     }
     x86_cpu_dump_local_apic_state(cs, CPU_DUMP_FPU);
 }
+#endif

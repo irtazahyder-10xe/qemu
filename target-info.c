@@ -32,11 +32,6 @@ const char *target_cpu_type(void)
     return target_info()->cpu_type;
 }
 
-const char *target_machine_typename(void)
-{
-    return target_info()->machine_typename;
-}
-
 EndianMode target_endian_mode(void)
 {
     return target_info()->endianness;
@@ -92,4 +87,9 @@ bool target_ppc64(void)
 bool target_s390x(void)
 {
     return target_arch() == SYS_EMU_TARGET_S390X;
+}
+
+bool target_riscv64(void)
+{
+    return target_arch() == SYS_EMU_TARGET_RISCV64;
 }

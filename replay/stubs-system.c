@@ -2,7 +2,7 @@
 #include "system/replay.h"
 #include "ui/input.h"
 
-void replay_input_event(QemuConsole *src, InputEvent *evt)
+void replay_input_event(QemuConsole *src, QemuInputEvent *evt)
 {
     qemu_input_event_send_impl(src, evt);
 }
@@ -63,22 +63,28 @@ void replay_vmstate_init(void)
 #include "qapi/error.h"
 #include "qemu/error-report.h"
 
-void hmp_info_replay(Monitor *mon, const QDict *qdict)
+#ifdef CONFIG_HMP
+void hmp_info_replay(MonitorHMP *hmp, const QDict *qdict)
 {
     error_report("replay support not available");
 }
-void hmp_replay_break(Monitor *mon, const QDict *qdict)
+
+void hmp_replay_break(MonitorHMP *hmp, const QDict *qdict)
 {
     error_report("replay support not available");
 }
-void hmp_replay_delete_break(Monitor *mon, const QDict *qdict)
+
+void hmp_replay_delete_break(MonitorHMP *hmp, const QDict *qdict)
 {
     error_report("replay support not available");
 }
-void hmp_replay_seek(Monitor *mon, const QDict *qdict)
+
+void hmp_replay_seek(MonitorHMP *hmp, const QDict *qdict)
 {
     error_report("replay support not available");
 }
+#endif
+
 ReplayInfo *qmp_query_replay(Error **errp)
 {
     error_set(errp, ERROR_CLASS_COMMAND_NOT_FOUND,
