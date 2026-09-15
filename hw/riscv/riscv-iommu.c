@@ -2552,6 +2552,7 @@ static void riscv_iommu_realize(DeviceState *dev, Error **errp)
      */
     memory_region_init_io(&s->regs_mr, OBJECT(dev), &riscv_iommu_mmio_ops, s,
         "riscv-iommu-regs", RISCV_IOMMU_REG_SIZE);
+    memory_region_enable_lockless_io(&s->regs_mr);
 
     /* Set power-on register state */
     stq_le_p(&s->regs_rw[RISCV_IOMMU_REG_CAP], s->cap);

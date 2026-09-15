@@ -42,8 +42,6 @@ MemTxResult rtl_mmio_rmw(hwaddr addr, bool is_write, bool is_8bytes,
         return MEMTX_ERROR;
     }
 
-    qemu_mutex_lock(&iommu_debug_resp);
-
     mtrans.hwrite = is_write;
     mtrans.hsize = is_8bytes ? 3 : 2;
 
@@ -88,9 +86,6 @@ MemTxResult rtl_mmio_rmw(hwaddr addr, bool is_write, bool is_8bytes,
      * If we are writing tr_req_ctl.Go/Busy, then do not issue another AHB
      * request before all AXI4 transactions for reference model are completed.
      */
-    if (addr != 608) {
-        qemu_mutex_unlock(&iommu_debug_resp);
-    }
     return MEMTX_OK;
 }
 
