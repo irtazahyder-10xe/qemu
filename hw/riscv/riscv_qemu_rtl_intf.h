@@ -60,6 +60,13 @@ typedef struct {
 void ahb3lite_event_handler(void *opaque, QEMUChrEvent event);
 
 /**
+ * Need AHB fd socket read event to allow vCPU to continue executing until the
+ * AHB response is generated.
+ */
+int can_read_rtl_mmio_resp(void *opaque);
+
+void rtl_mmio_read_resp(void *opaque, const uint8_t *buf, int size);
+/**
  * @brief QEMU -> RTL MMR read, modify, write bypass.
  *
  * Forwards any IOMMU MMR RMW request to serial port ahb_fe. The backend

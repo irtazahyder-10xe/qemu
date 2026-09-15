@@ -2624,7 +2624,8 @@ static void riscv_iommu_realize(DeviceState *dev, Error **errp)
 
     /* Initializing ahb3lite frontend */
     // qemu_chr_fe_init(&s->ahb3lite_fe, s->ahb3lite, errp);
-    qemu_chr_fe_set_handlers(&s->ahb3lite_fe, NULL, NULL, ahb3lite_event_handler,
+    qemu_chr_fe_set_handlers(&s->ahb3lite_fe, can_read_rtl_mmio_resp,
+                             rtl_mmio_read_resp, ahb3lite_event_handler,
                              NULL, &s->ahb3lite_fe, NULL, true);
 }
 
