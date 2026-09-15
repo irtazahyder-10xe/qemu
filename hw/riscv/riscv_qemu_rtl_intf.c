@@ -8,7 +8,10 @@
 
 #include "riscv_qemu_rtl_intf.h"
 
-QemuMutex iommu_debug_resp;
+struct {
+    QemuSemaphore rtl_qemu_sem;
+    ahb3lite_slave_resp_s resp;
+} ahb_resp;
 
 void default_rtl_protocol_event_handler(void *opaque, QEMUChrEvent event, const char id_str[5])
 {
@@ -25,8 +28,19 @@ void default_rtl_protocol_event_handler(void *opaque, QEMUChrEvent event, const 
 
 void ahb3lite_event_handler(void *opaque, QEMUChrEvent event)
 {
-    qemu_mutex_init(&iommu_debug_resp);
     default_rtl_protocol_event_handler(opaque, event, "reqt");
+}
+
+int can_read_rtl_mmio_resp(void *opaque)
+{
+    return sizeof(ahb3lite_slave_resp_s);
+}
+
+void rtl_mmio_read_resp(void *opaque, const uint8_t *buf, int size)
+{
+    assert(size == sizeof(ahb3lite_slave_resp_s));
+    memmove(&ahb_resp.resp, buf, size);
+    qemu_sem_post(&ahb_resp.rtl_qemu_sem);
 }
 
 MemTxResult rtl_mmio_rmw(hwaddr addr, bool is_write, bool is_8bytes,
@@ -36,6 +50,8 @@ MemTxResult rtl_mmio_rmw(hwaddr addr, bool is_write, bool is_8bytes,
     int chardev_status;
     ahb3lite_master_reqt_s mtrans;
     ahb3lite_slave_resp_s strans;
+
+    qemu_sem_init(&ahb_resp.rtl_qemu_sem, 0);
 
     if (!qemu_chr_fe_backend_open(ahb_fe)) {
         /* Charbackend is not open */
@@ -62,9 +78,10 @@ MemTxResult rtl_mmio_rmw(hwaddr addr, bool is_write, bool is_8bytes,
         return MEMTX_ERROR;
     }
 
-    chardev_status = qemu_chr_fe_read_all(ahb_fe, (uint8_t*)&strans,
-                                          sizeof(strans));
+    qemu_sem_wait(&ahb_resp.rtl_qemu_sem);
+    memcpy(&strans, &ahb_resp.resp, sizeof(strans));
 
+    qemu_sem_destroy(&ahb_resp.rtl_qemu_sem);
     /* Wait for AXI4 to also complete if register was debug control register */
     if (chardev_status < 0) {
         return MEMTX_ERROR;
