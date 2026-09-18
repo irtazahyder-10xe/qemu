@@ -173,6 +173,12 @@ int can_read_rtl_trans_resp(void *opaque);
 void read_rtl_trans_resp(void *opaque, const uint8_t *buf, int size);
 
 /**
+ * Hash table functions used by devices for FE MUX rerouting.
+ */
+bool insert_edu_dev_state(uint64_t dev_id, Object *obj);
+bool remove_edu_dev_state(uint64_t dev_id);
+
+/**
  * @brief QEMU -> RTL IOVA translation request
  *
  * Forwards any IOMMU translation requests to serial port lti_fe. The backend

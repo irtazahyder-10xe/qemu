@@ -80,6 +80,28 @@ MemTxResult rtl_mmio_rmw(hwaddr addr, bool is_write, bool is_8bytes,
     return MEMTX_OK;
 }
 
+#define LTI_ID_DEVICE_ID_BITS 8
+#define LTI_ID_DEVICE_ID_MASK ((1 << LTI_ID_DEVICE_ID_BITS) - 1)
+
+/*
+ * GHashTable to store device id's and their corresponding EDUState
+ * This helps us redirect IOMMU responses to required RTL
+ */
+GHashTable *edu_table;
+
+bool insert_edu_dev_state(uint64_t dev_id, Object *obj)
+{
+    if (obj == NULL) {
+        return false;
+    }
+    return g_hash_table_insert(edu_table, GUINT_TO_POINTER(dev_id), EDU(obj));
+}
+
+bool remove_edu_dev_state(uint64_t dev_id)
+{
+    return g_hash_table_remove(edu_table, GUINT_TO_POINTER(dev_id));
+}
+
 void lti_event_handler(void *opaque, QEMUChrEvent event)
 {
     EduState *edu = opaque;
@@ -88,6 +110,7 @@ void lti_event_handler(void *opaque, QEMUChrEvent event)
         case CHR_EVENT_OPENED:
             /* Writing ID to LTI socket intf */
             qemu_chr_fe_write_all(&edu->lti_fe, (uint8_t *) "reqt", 4);
+            edu_table = g_hash_table_new(g_direct_hash, g_direct_equal);
             break;
         default:
             break;
@@ -104,7 +127,7 @@ void read_rtl_trans_resp(void *opaque, const uint8_t *buf, int size)
 {
     const char *resp_status;
     lti_LR_s resp;
-    EduState *edu = opaque;
+    EduState *edu;
 
     assert(size == sizeof(lti_LR_s));
     memcpy(&resp, buf, size);
@@ -123,10 +146,15 @@ void read_rtl_trans_resp(void *opaque, const uint8_t *buf, int size)
                 resp_status = "INVALID_RESP";
             }
     }
+    /* Dispatching response to desired edu device */
+    uint64_t dev_id = resp.id & LTI_ID_DEVICE_ID_MASK;
+    edu = g_hash_table_lookup(edu_table, GUINT_TO_POINTER(dev_id));
+
     trace_qrb_lti_resp(resp.id, resp_status, resp.spa,
                        resp.mrif_fields,
                        (resp.mrif_fields >> LTI_LRUSER_NPPN_OFFSET) & LTI_LRUSER_NPPN_MASK,
                        resp.mrif_fields & LTI_LRUSER_NID_MASK);
+
     edu_perform_dma(edu, resp);
 }
 
@@ -139,7 +167,7 @@ uint64_t rtl_trans_reqt(hwaddr iova, bool is_write, bool is_priv,
     static uint64_t lti_id = 0;
     lti_LA_s req;
 
-    req.id = lti_id;
+    req.id = (lti_id << LTI_ID_DEVICE_ID_BITS) | dev_id;
     req.iova = iova;
     req.dev_id = dev_id;
     req.is_proc_valid = proc_id_valid;
