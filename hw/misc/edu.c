@@ -537,6 +537,7 @@ static void edu_instance_finalize(Object *obj)
 {
     EduState *edu = EDU(obj);
     g_hash_table_destroy(edu->edu_state_history);
+    qemu_chr_fe_deinit(&edu->lti_fe, false);
 }
 
 static void edu_instance_init(Object *obj)
@@ -546,7 +547,12 @@ static void edu_instance_init(Object *obj)
     edu->dma_mask = (1UL << 28) - 1;
     object_property_add_uint64_ptr(obj, "dma_mask",
                                    &edu->dma_mask, OBJ_PROP_FLAG_READWRITE);
-    // TODO: TYPE_CHARDEV -> TYPE_CHARDEV_MUX when using multiple devices
+    /**
+     * TYPE_CHARDEV also accepts TYPE_CHARDEV_MUX, so only need to update 
+     * cmd args
+     * NOTE: By default MUX supports at most 4 frontends
+     */
+
     object_property_add_link(obj, "lti_intf", TYPE_CHARDEV,
                              (Object **)&edu->lti_chrdev,
                              qdev_prop_allow_set_link_before_realize,
