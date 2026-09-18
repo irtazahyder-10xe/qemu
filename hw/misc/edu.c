@@ -265,7 +265,7 @@ static void edu_dma_timer(void *opaque)
     value->is_msi = false;
     id = rtl_trans_reqt(edu_clamp_addr(edu, dma_to_pci ? edu->dma.dst : edu->dma.src),
                         EDU_DMA_DIR(edu->dma.cmd) == EDU_DMA_TO_PCI,
-                        priv, pci_get_word(edu->pdev.config + PCI_DEVICE_ID),
+                        priv, edu->pdev.devfn,
                         !!(edu->process_info_dma & EDU_PROC_VALID),
                         (edu->process_info_dma >> EDU_PROC_PASID_OFFSET) & EDU_PROC_PASID_MASK,
                         &edu->lti_fe);
@@ -539,7 +539,7 @@ static void edu_instance_finalize(Object *obj)
     EduState *edu = EDU(obj);
     g_hash_table_destroy(edu->edu_state_history);
     qemu_chr_fe_deinit(&edu->lti_fe, false);
-    remove_edu_dev_state(pci_get_word(edu->pdev.config + PCI_DEVICE_ID));
+    remove_edu_dev_state(edu->pdev.devfn);
 }
 
 static char *get_edu_addr(Object *obj, Error **errp)
@@ -557,7 +557,7 @@ static void set_edu_addr(Object *obj, const char *str, Error **errp)
 static void edu_instance_init(Object *obj)
 {
     EduState *edu = EDU(obj);
-    uint64_t dev_id = pci_get_word(edu->pdev.config + PCI_DEVICE_ID);
+    uint64_t dev_id = edu->pdev.devfn;
 
     edu->dma_mask = (1UL << 28) - 1;
     object_property_add_uint64_ptr(obj, "dma_mask",
