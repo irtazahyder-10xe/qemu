@@ -515,6 +515,11 @@ static void pci_edu_realize(PCIDevice *pdev, Error **errp)
                           "edu-mmio", 1 * MiB);
     pci_register_bar(pdev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY, &edu->mmio);
     edu->edu_state_history = g_hash_table_new_full(NULL, NULL, NULL, free);
+
+    uint64_t dev_id = edu->pdev.devfn;
+    if (!insert_edu_dev_state(dev_id, OBJECT(edu))) {
+        error_report("Unable to write to GHashTable for device: %lu\n", dev_id);
+    }
 }
 
 static void pci_edu_uninit(PCIDevice *pdev)
@@ -557,7 +562,6 @@ static void set_edu_addr(Object *obj, const char *str, Error **errp)
 static void edu_instance_init(Object *obj)
 {
     EduState *edu = EDU(obj);
-    uint64_t dev_id = edu->pdev.devfn;
 
     edu->dma_mask = (1UL << 28) - 1;
     object_property_add_uint64_ptr(obj, "dma_mask",
@@ -574,9 +578,6 @@ static void edu_instance_init(Object *obj)
                              0);
     object_property_add_str(obj, "addr",
                             get_edu_addr, set_edu_addr);
-    if (!insert_edu_dev_state(dev_id, obj)) {
-        error_report("Unable to write to GHashTable for device: %lu\n", dev_id);
-    }
 }
 
 static void edu_class_init(ObjectClass *class, const void *data)
