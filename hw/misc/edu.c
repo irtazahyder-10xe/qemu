@@ -37,6 +37,7 @@
 #include "hw/core/qdev-properties.h"
 #include "hw/misc/edu.h"
 #include "hw/riscv/riscv_qemu_rtl_intf.h"
+#include "qemu/error-report.h"
 #include "trace.h"
 
 static bool edu_msi_enabled(EduState *edu)
@@ -147,10 +148,10 @@ static dma_addr_t edu_clamp_addr(const EduState *edu, dma_addr_t addr)
     return res;
 }
 
-
 void edu_perform_dma(void *opaque, lti_LR_s resp)
 {
     EduState *edu = opaque;
+
     MemTxResult result;
     edu_ghash_entry_s *entry = g_hash_table_lookup(edu->edu_state_history,
                                                    GINT_TO_POINTER(resp.id));
@@ -264,7 +265,8 @@ static void edu_dma_timer(void *opaque)
     value->is_msi = false;
     id = rtl_trans_reqt(edu_clamp_addr(edu, dma_to_pci ? edu->dma.dst : edu->dma.src),
                         EDU_DMA_DIR(edu->dma.cmd) == EDU_DMA_TO_PCI,
-                        priv, 8, !!(edu->process_info_dma & EDU_PROC_VALID),
+                        priv, pci_get_word(edu->pdev.config + PCI_DEVICE_ID),
+                        !!(edu->process_info_dma & EDU_PROC_VALID),
                         (edu->process_info_dma >> EDU_PROC_PASID_OFFSET) & EDU_PROC_PASID_MASK,
                         &edu->lti_fe);
     g_hash_table_insert(edu->edu_state_history, GINT_TO_POINTER(id), value);
@@ -502,9 +504,8 @@ static void pci_edu_realize(PCIDevice *pdev, Error **errp)
 
     qemu_mutex_init(&edu->thr_mutex);
     qemu_cond_init(&edu->thr_cond);
-    qemu_thread_create(&edu->thread, "edu", edu_fact_thread,
+    qemu_thread_create(&edu->thread, "edu_fact", edu_fact_thread,
                        edu, QEMU_THREAD_JOINABLE);
-
     /* Initializing lti frontend */
     qemu_chr_fe_init(&edu->lti_fe, edu->lti_chrdev, errp);
     qemu_chr_fe_set_handlers(&edu->lti_fe, can_read_rtl_trans_resp,
@@ -538,11 +539,25 @@ static void edu_instance_finalize(Object *obj)
     EduState *edu = EDU(obj);
     g_hash_table_destroy(edu->edu_state_history);
     qemu_chr_fe_deinit(&edu->lti_fe, false);
+    remove_edu_dev_state(pci_get_word(edu->pdev.config + PCI_DEVICE_ID));
+}
+
+static char *get_edu_addr(Object *obj, Error **errp)
+{
+    EduState *edu = EDU(obj);
+    return g_strdup(edu->addr);
+}
+
+static void set_edu_addr(Object *obj, const char *str, Error **errp)
+{
+    EduState *edu = EDU(obj);
+    strcpy(edu->addr, str);
 }
 
 static void edu_instance_init(Object *obj)
 {
     EduState *edu = EDU(obj);
+    uint64_t dev_id = pci_get_word(edu->pdev.config + PCI_DEVICE_ID);
 
     edu->dma_mask = (1UL << 28) - 1;
     object_property_add_uint64_ptr(obj, "dma_mask",
@@ -557,6 +572,11 @@ static void edu_instance_init(Object *obj)
                              (Object **)&edu->lti_chrdev,
                              qdev_prop_allow_set_link_before_realize,
                              0);
+    object_property_add_str(obj, "addr",
+                            get_edu_addr, set_edu_addr);
+    if (!insert_edu_dev_state(dev_id, obj)) {
+        error_report("Unable to write to GHashTable for device: %lu\n", dev_id);
+    }
 }
 
 static void edu_class_init(ObjectClass *class, const void *data)

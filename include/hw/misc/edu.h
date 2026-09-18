@@ -52,12 +52,14 @@ struct EduState {
 # define EDU_DMA_FROM_PCI       0
 # define EDU_DMA_TO_PCI         1
 #define EDU_DMA_IRQ             0x4
+    QemuThread dma_thread;
     dma_state dma;
     QEMUTimer dma_timer;
     char dma_buf[DMA_SIZE];
     uint64_t dma_mask;
     Chardev *lti_chrdev;
     CharFrontend lti_fe;
+    char *addr;
     GHashTable *edu_state_history;
 
 #define EDU_PROC_DMA_OFFSET     0x100
