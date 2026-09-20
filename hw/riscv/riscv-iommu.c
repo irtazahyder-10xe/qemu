@@ -2506,6 +2506,7 @@ static void riscv_iommu_instance_finalize(Object *obj)
 
     g_hash_table_unref(s->ctx_cache);
     g_hash_table_unref(s->iot_cache);
+    rv_intf_cleanup();
 }
 
 static void riscv_iommu_realize(DeviceState *dev, Error **errp)

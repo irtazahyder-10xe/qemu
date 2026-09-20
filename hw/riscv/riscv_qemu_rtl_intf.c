@@ -115,10 +115,13 @@ MemTxResult rtl_mmio_rmw(hwaddr addr, bool is_write, bool is_8bytes,
  * GHashTable to store device id's and their corresponding EDUState
  * This helps us redirect IOMMU responses to required RTL
  */
-GHashTable *edu_table;
+GHashTable *edu_table = NULL;
 
 bool insert_edu_dev_state(uint64_t dev_id, Object *obj)
 {
+    if (edu_table == NULL) {
+        edu_table = g_hash_table_new(g_direct_hash, g_direct_equal);
+    }
     if (obj == NULL) {
         return false;
     }
@@ -138,7 +141,6 @@ void lti_event_handler(void *opaque, QEMUChrEvent event)
         case CHR_EVENT_OPENED:
             /* Writing ID to LTI socket intf */
             qemu_chr_fe_write_all(&edu->lti_fe, (uint8_t *) "reqt", 4);
-            edu_table = g_hash_table_new(g_direct_hash, g_direct_equal);
             break;
         default:
             break;
@@ -288,4 +290,9 @@ void rtl_dram_access(void *opaque, const uint8_t *buf, int size)
         return;
     }
     trace_qrb_axi4_resp(resp.id, mem_status == MEMTX_OK ? "OKAY" : "SLVERR");
+}
+
+void rv_intf_cleanup(void)
+{
+    g_hash_table_destroy(edu_table);
 }

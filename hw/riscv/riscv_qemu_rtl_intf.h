@@ -264,3 +264,6 @@ typedef struct {
 void axi4_event_handler(void *opaque, QEMUChrEvent event);
 int rtl_can_dram_access(void *opaque);
 void rtl_dram_access(void *opaque, const uint8_t *buf, int size);
+
+/* Cleanup any memory allocated when setting up QEMU RTL interface */
+void rv_intf_cleanup(void);
