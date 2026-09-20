@@ -198,7 +198,7 @@ uint64_t rtl_trans_reqt(hwaddr iova, bool is_write, bool is_priv,
     static uint64_t lti_id = 0;
     lti_LA_s req;
 
-    req.id = (lti_id << LTI_ID_DEVICE_ID_BITS) | dev_id;
+    req.id = (lti_id++ << LTI_ID_DEVICE_ID_BITS) | dev_id;
     req.iova = iova;
     req.dev_id = dev_id;
     req.is_proc_valid = proc_id_valid;
@@ -214,7 +214,7 @@ uint64_t rtl_trans_reqt(hwaddr iova, bool is_write, bool is_priv,
     /* Sending LTI request to QRB */
     /* TODO: Check for write fails */
     qemu_chr_fe_write_all(lti_fe, (uint8_t *)&req, sizeof(req));
-    return lti_id++;
+    return req.id;
 }
 
 /* AXI */
