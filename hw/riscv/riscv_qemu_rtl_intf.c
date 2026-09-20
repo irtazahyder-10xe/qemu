@@ -136,12 +136,16 @@ bool remove_edu_dev_state(uint64_t dev_id)
 
 void lti_event_handler(void *opaque, QEMUChrEvent event)
 {
+    /* Only 256 devices supported */
+    static uint8_t __ref = 0;
     EduState *edu = opaque;
     /* Upon OPEN, send id string to QRB server */
     switch (event) {
         case CHR_EVENT_OPENED:
-            /* Writing ID to LTI socket intf */
-            qemu_chr_fe_write_all(&edu->lti_fe, (uint8_t *) "reqt", 4);
+            if (!__ref++) {
+                /* Writing ID to LTI socket intf */
+                qemu_chr_fe_write_all(&edu->lti_fe, (uint8_t *) "reqt", 4);
+            }
             break;
         default:
             break;
