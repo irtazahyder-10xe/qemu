@@ -33,6 +33,7 @@ qrb_ahb3lite_slave(uint64_t hrdata, bool hresp) "[AHB] HRDATA: 0x%"PRIx64" HRESP
 # LTI
 qrb_lti_reqt(uint64_t id, uint64_t iova, uint32_t dev_id, bool proc_valid, uint32_t proc_id, const char *flow, bool is_priv, bool is_write) "[LTI] ID 0x%"PRIx64" IOVA: 0x%"PRIx64" Device ID: %d Process Valid: %1d Process ID: %d Flow: %s PRIV: %1d WRITE: %1d"
 qrb_lti_resp(uint64_t id, const char *resp_status, uint64_t ppn, uint64_t mrif_fields, uint64_t mrif_ppn, uint32_t mrif_nid) "[LTI] ID 0x%"PRIx64" RESP: %s PPN: 0x%"PRIx64" LR_USER_RAW: 0x%"PRIx64" MRIF PPN: 0x%"PRIx64" MRIF NID: %d"
+qrb_reg_edu(uint64_t dev_id, uintptr_t edu_ptr) "[EDU-TABLE] DEV_ID: %"PRIx64" EDU PTR: %"PRIx64
 
 # AXI4
 qrb_axi4_reqt(uint64_t id, uint64_t addr, const char *op, int pte_bytes) "[AXI4] ID 0x%"PRIx64" ADDR: 0x%"PRIx64" OP: %s BYTES: %d"

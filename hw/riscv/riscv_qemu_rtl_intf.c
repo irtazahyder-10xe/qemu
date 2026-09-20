@@ -125,6 +125,7 @@ bool insert_edu_dev_state(uint64_t dev_id, Object *obj)
     if (obj == NULL) {
         return false;
     }
+    trace_qrb_reg_edu(dev_id, (uintptr_t) EDU(obj));
     return g_hash_table_insert(edu_table, GUINT_TO_POINTER(dev_id), EDU(obj));
 }
 
