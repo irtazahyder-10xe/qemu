@@ -547,18 +547,6 @@ static void edu_instance_finalize(Object *obj)
     remove_edu_dev_state(edu->pdev.devfn);
 }
 
-static char *get_edu_addr(Object *obj, Error **errp)
-{
-    EduState *edu = EDU(obj);
-    return g_strdup(edu->addr);
-}
-
-static void set_edu_addr(Object *obj, const char *str, Error **errp)
-{
-    EduState *edu = EDU(obj);
-    strcpy(edu->addr, str);
-}
-
 static void edu_instance_init(Object *obj)
 {
     EduState *edu = EDU(obj);
@@ -576,8 +564,6 @@ static void edu_instance_init(Object *obj)
                              (Object **)&edu->lti_chrdev,
                              qdev_prop_allow_set_link_before_realize,
                              0);
-    object_property_add_str(obj, "addr",
-                            get_edu_addr, set_edu_addr);
 }
 
 static void edu_class_init(ObjectClass *class, const void *data)

@@ -59,7 +59,6 @@ struct EduState {
     uint64_t dma_mask;
     Chardev *lti_chrdev;
     CharFrontend lti_fe;
-    char *addr;
     GHashTable *edu_state_history;
 
 #define EDU_PROC_DMA_OFFSET     0x100
