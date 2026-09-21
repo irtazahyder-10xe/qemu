@@ -159,8 +159,9 @@ int can_read_rtl_trans_resp(void *opaque)
     return sizeof(lti_LR_s);
 }
 
-void read_rtl_trans_resp(void *opaque, const uint8_t *buf, int size)
+void read_rtl_trans_resp(void *opaque, const uint8_t *buff, int size)
 {
+    // Internal buffers to store incoming data
     static uint8_t __buff[0x80];
     static uint8_t __buff_size;
     const char *resp_status;
@@ -169,11 +170,18 @@ void read_rtl_trans_resp(void *opaque, const uint8_t *buf, int size)
 
     if (size != sizeof(lti_LR_s))
     {
-        memcpy(__buff + __buff_size, buf, size);
+        memcpy(__buff + __buff_size, buff, size);
         __buff_size += size;
-        return;
+        if (__buff_size < sizeof(lti_LR_s)) {
+            return;
+        } else {
+            memcpy(&resp, __buff, sizeof(lti_LR_s));
+            memmove(__buff, __buff + sizeof(lti_LR_s), __buff_size - sizeof(lti_LR_s));
+            __buff_size -= sizeof(lti_LR_s);
+        }
+    } else {
+        memcpy(&resp, buff, size);
     }
-    memcpy(&resp, buf, size);
 
     switch (resp.resp) {
         case LTI_RESP_SUCCESS:
