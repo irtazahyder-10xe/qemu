@@ -144,6 +144,7 @@ void lti_event_handler(void *opaque, QEMUChrEvent event)
         case CHR_EVENT_OPENED:
             if (!__ref++) {
                 /* Writing ID to LTI socket intf */
+                trace_qrb_reg_edu(edu->pdev.devfn, (uintptr_t) edu);
                 qemu_chr_fe_write_all(&edu->lti_fe, (uint8_t *) "reqt", 4);
             }
             break;
