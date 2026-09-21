@@ -161,11 +161,18 @@ int can_read_rtl_trans_resp(void *opaque)
 
 void read_rtl_trans_resp(void *opaque, const uint8_t *buf, int size)
 {
+    static uint8_t __buff[0x80];
+    static uint8_t __buff_size;
     const char *resp_status;
     lti_LR_s resp;
     EduState *edu;
 
-    assert(size == sizeof(lti_LR_s));
+    if (size != sizeof(lti_LR_s))
+    {
+        memcpy(__buff + __buff_size, buf, size);
+        __buff_size += size;
+        return;
+    }
     memcpy(&resp, buf, size);
 
     switch (resp.resp) {
