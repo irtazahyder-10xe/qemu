@@ -78,7 +78,9 @@ MemTxResult rtl_mmio_rmw(hwaddr addr, bool is_write, bool is_8bytes,
         return MEMTX_ERROR;
     }
 
+    bql_unlock();
     qemu_sem_wait(&ahb_resp.rtl_qemu_sem);
+    bql_lock();
     memcpy(&strans, &ahb_resp.resp, sizeof(strans));
 
     qemu_sem_destroy(&ahb_resp.rtl_qemu_sem);
