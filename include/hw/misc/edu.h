@@ -57,8 +57,6 @@ struct EduState {
     QEMUTimer dma_timer;
     char dma_buf[DMA_SIZE];
     uint64_t dma_mask;
-    Chardev *lti_chrdev;
-    CharFrontend lti_fe;
     GHashTable *edu_state_history;
 
 #define EDU_PROC_DMA_OFFSET     0x100

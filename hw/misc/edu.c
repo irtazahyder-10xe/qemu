@@ -87,8 +87,7 @@ static void edu_msi_trans(PCIDevice *dev, unsigned int vector)
     value->is_msi = true;
     id = rtl_trans_reqt(msg.address, true, priv, 8,
                         !!(edu->process_info_msi & EDU_PROC_VALID),
-                        (edu->process_info_msi >> EDU_PROC_PASID_OFFSET) & EDU_PROC_PASID_MASK,
-                        &edu->lti_fe);
+                        (edu->process_info_msi >> EDU_PROC_PASID_OFFSET) & EDU_PROC_PASID_MASK);
     g_hash_table_insert(edu->edu_state_history, GINT_TO_POINTER(id), value);
     trace_edu_msi(id, msg.address, msg.data);
 }
@@ -267,8 +266,7 @@ static void edu_dma_timer(void *opaque)
                         EDU_DMA_DIR(edu->dma.cmd) == EDU_DMA_TO_PCI,
                         priv, edu->pdev.devfn,
                         !!(edu->process_info_dma & EDU_PROC_VALID),
-                        (edu->process_info_dma >> EDU_PROC_PASID_OFFSET) & EDU_PROC_PASID_MASK,
-                        &edu->lti_fe);
+                        (edu->process_info_dma >> EDU_PROC_PASID_OFFSET) & EDU_PROC_PASID_MASK);
     g_hash_table_insert(edu->edu_state_history, GINT_TO_POINTER(id), value);
     trace_edu_dma(id, edu_clamp_addr(edu, dma_to_pci ? edu->dma.dst : edu->dma.src),
                   EDU_DMA_DIR(edu->dma.cmd) == EDU_DMA_TO_PCI ? "WRITE" : "READ");
@@ -507,10 +505,6 @@ static void pci_edu_realize(PCIDevice *pdev, Error **errp)
     qemu_thread_create(&edu->thread, "edu_fact", edu_fact_thread,
                        edu, QEMU_THREAD_JOINABLE);
     /* Initializing lti frontend */
-    qemu_chr_fe_init(&edu->lti_fe, edu->lti_chrdev, errp);
-    qemu_chr_fe_set_handlers(&edu->lti_fe, can_read_rtl_trans_resp,
-                             read_rtl_trans_resp, lti_event_handler,
-                             NULL, edu, NULL, true);
     memory_region_init_io(&edu->mmio, OBJECT(edu), &edu_mmio_ops, edu,
                           "edu-mmio", 1 * MiB);
     pci_register_bar(pdev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY, &edu->mmio);
@@ -543,7 +537,6 @@ static void edu_instance_finalize(Object *obj)
 {
     EduState *edu = EDU(obj);
     g_hash_table_destroy(edu->edu_state_history);
-    qemu_chr_fe_deinit(&edu->lti_fe, false);
     remove_edu_dev_state(edu->pdev.devfn);
 }
 
@@ -554,16 +547,6 @@ static void edu_instance_init(Object *obj)
     edu->dma_mask = (1UL << 28) - 1;
     object_property_add_uint64_ptr(obj, "dma_mask",
                                    &edu->dma_mask, OBJ_PROP_FLAG_READWRITE);
-    /**
-     * TYPE_CHARDEV also accepts TYPE_CHARDEV_MUX, so only need to update 
-     * cmd args
-     * NOTE: By default MUX supports at most 4 frontends
-     */
-
-    object_property_add_link(obj, "lti_intf", TYPE_CHARDEV,
-                             (Object **)&edu->lti_chrdev,
-                             qdev_prop_allow_set_link_before_realize,
-                             0);
 }
 
 static void edu_class_init(ObjectClass *class, const void *data)

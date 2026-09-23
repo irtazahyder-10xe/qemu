@@ -206,7 +206,7 @@ bool remove_edu_dev_state(uint64_t dev_id);
  */
 uint64_t rtl_trans_reqt(hwaddr iova, bool is_write, bool is_priv,
                         uint32_t dev_id, bool proc_id_valid,
-                        uint32_t proc_id, CharFrontend *lti_fe);
+                        uint32_t proc_id);
 
 /* ============= AMBA AXI4 Protocol ============= */
 /* Maximum size of PTE fetched from memory (in bytes) */
@@ -264,6 +264,3 @@ typedef struct {
 void axi4_event_handler(void *opaque, QEMUChrEvent event);
 int rtl_can_dram_access(void *opaque);
 void rtl_dram_access(void *opaque, const uint8_t *buf, int size);
-
-/* Cleanup any memory allocated when setting up QEMU RTL interface */
-void rv_intf_cleanup(void);

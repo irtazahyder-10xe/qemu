@@ -2506,7 +2506,6 @@ static void riscv_iommu_instance_finalize(Object *obj)
 
     g_hash_table_unref(s->ctx_cache);
     g_hash_table_unref(s->iot_cache);
-    rv_intf_cleanup();
 }
 
 static void riscv_iommu_realize(DeviceState *dev, Error **errp)
@@ -2628,6 +2627,9 @@ static void riscv_iommu_realize(DeviceState *dev, Error **errp)
     qemu_chr_fe_set_handlers(&s->ahb3lite_fe, can_read_rtl_mmio_resp,
                              rtl_mmio_read_resp, ahb3lite_event_handler,
                              NULL, &s->ahb3lite_fe, NULL, true);
+    qemu_chr_fe_set_handlers(&s->lti_fe, can_read_rtl_trans_resp,
+                             read_rtl_trans_resp, lti_event_handler,
+                             NULL, &s->lti_fe, NULL, true);
 }
 
 static void riscv_iommu_unrealize(DeviceState *dev)
@@ -2690,6 +2692,7 @@ static const Property riscv_iommu_properties[] = {
     DEFINE_PROP_LINK("downstream-mr", RISCVIOMMUState, target_mr,
         TYPE_MEMORY_REGION, MemoryRegion *),
     DEFINE_PROP_CHR("ahb3lite", RISCVIOMMUState, ahb3lite_fe),
+    DEFINE_PROP_CHR("lti", RISCVIOMMUState, lti_fe),
     DEFINE_PROP_UINT8("hpm-counters", RISCVIOMMUState, hpm_cntrs,
                       RISCV_IOMMU_IOCOUNT_NUM),
 };

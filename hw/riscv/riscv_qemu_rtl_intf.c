@@ -115,43 +115,36 @@ MemTxResult rtl_mmio_rmw(hwaddr addr, bool is_write, bool is_8bytes,
  * GHashTable to store device id's and their corresponding EDUState
  * This helps us redirect IOMMU responses to required RTL
  */
-GHashTable *edu_table = NULL;
+struct {
+    CharFrontend *lti_fe;
+    GHashTable *edu_table;
+} lti_broker_s = {NULL, NULL};
 
 bool insert_edu_dev_state(uint64_t dev_id, Object *obj)
 {
-    if (edu_table == NULL) {
-        edu_table = g_hash_table_new(g_direct_hash, g_direct_equal);
+    if (lti_broker_s.edu_table == NULL) {
+        lti_broker_s.edu_table = g_hash_table_new(g_direct_hash, g_direct_equal);
     }
     if (obj == NULL) {
         return false;
     }
     trace_qrb_reg_edu(dev_id, (uintptr_t) EDU(obj));
-    return g_hash_table_insert(edu_table, GUINT_TO_POINTER(dev_id), EDU(obj));
+    return g_hash_table_insert(lti_broker_s.edu_table, GUINT_TO_POINTER(dev_id), EDU(obj));
 }
 
 bool remove_edu_dev_state(uint64_t dev_id)
 {
-    return g_hash_table_remove(edu_table, GUINT_TO_POINTER(dev_id));
+    bool status = g_hash_table_remove(lti_broker_s.edu_table, GUINT_TO_POINTER(dev_id));
+    if (g_hash_table_size(lti_broker_s.edu_table) == 0) {
+        g_hash_table_destroy(lti_broker_s.edu_table);
+    }
+    return status;
 }
 
 void lti_event_handler(void *opaque, QEMUChrEvent event)
 {
-    /* Only 256 devices supported */
-    static uint8_t __ref = 0;
-    EduState *edu = opaque;
-    /* Upon OPEN, send id string to QRB server */
-    switch (event) {
-        case CHR_EVENT_OPENED:
-            if (!__ref++) {
-                /* Writing ID to LTI socket intf */
-                trace_qrb_reg_edu(edu->pdev.devfn, (uintptr_t) edu);
-                qemu_chr_fe_write_all(&edu->lti_fe, (uint8_t *) "reqt", 4);
-            }
-            break;
-        default:
-            break;
-    }
-    // default_rtl_protocol_event_handler(opaque, event, "reqt");
+    default_rtl_protocol_event_handler(opaque, event, "reqt");
+    lti_broker_s.lti_fe = opaque;
 }
 
 int can_read_rtl_trans_resp(void *opaque)
@@ -161,27 +154,12 @@ int can_read_rtl_trans_resp(void *opaque)
 
 void read_rtl_trans_resp(void *opaque, const uint8_t *buff, int size)
 {
-    // Internal buffers to store incoming data
-    static uint8_t __buff[0x80];
-    static uint8_t __buff_size;
     const char *resp_status;
     lti_LR_s resp;
     EduState *edu;
 
-    if (size != sizeof(lti_LR_s))
-    {
-        memcpy(__buff + __buff_size, buff, size);
-        __buff_size += size;
-        if (__buff_size < sizeof(lti_LR_s)) {
-            return;
-        } else {
-            memcpy(&resp, __buff, sizeof(lti_LR_s));
-            memmove(__buff, __buff + sizeof(lti_LR_s), __buff_size - sizeof(lti_LR_s));
-            __buff_size -= sizeof(lti_LR_s);
-        }
-    } else {
-        memcpy(&resp, buff, size);
-    }
+    assert (size == sizeof(lti_LR_s));
+    memcpy(&resp, buff, size);
 
     switch (resp.resp) {
         case LTI_RESP_SUCCESS:
@@ -199,7 +177,7 @@ void read_rtl_trans_resp(void *opaque, const uint8_t *buff, int size)
     }
     /* Dispatching response to desired edu device */
     uint64_t dev_id = resp.id & LTI_ID_DEVICE_ID_MASK;
-    edu = g_hash_table_lookup(edu_table, GUINT_TO_POINTER(dev_id));
+    edu = g_hash_table_lookup(lti_broker_s.edu_table, GUINT_TO_POINTER(dev_id));
 
     trace_qrb_lti_resp(resp.id, resp_status, resp.spa,
                        resp.mrif_fields,
@@ -211,7 +189,7 @@ void read_rtl_trans_resp(void *opaque, const uint8_t *buff, int size)
 
 uint64_t rtl_trans_reqt(hwaddr iova, bool is_write, bool is_priv,
                         uint32_t dev_id, bool proc_id_valid,
-                        uint32_t proc_id, CharFrontend *lti_fe)
+                        uint32_t proc_id)
 {
     /* Static ID assigned to every function caller to differentiate between
      * responses */
@@ -233,7 +211,7 @@ uint64_t rtl_trans_reqt(hwaddr iova, bool is_write, bool is_priv,
 
     /* Sending LTI request to QRB */
     /* TODO: Check for write fails */
-    qemu_chr_fe_write_all(lti_fe, (uint8_t *)&req, sizeof(req));
+    qemu_chr_fe_write_all(lti_broker_s.lti_fe, (uint8_t *)&req, sizeof(req));
     return req.id;
 }
 
@@ -311,9 +289,4 @@ void rtl_dram_access(void *opaque, const uint8_t *buf, int size)
         return;
     }
     trace_qrb_axi4_resp(resp.id, mem_status == MEMTX_OK ? "OKAY" : "SLVERR");
-}
-
-void rv_intf_cleanup(void)
-{
-    g_hash_table_destroy(edu_table);
 }
