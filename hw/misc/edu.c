@@ -85,7 +85,7 @@ static void edu_msi_trans(PCIDevice *dev, unsigned int vector)
 
     memcpy(&value->msi, &msg, sizeof(MSIMessage));
     value->is_msi = true;
-    id = rtl_trans_reqt(msg.address, true, priv, 8,
+    id = rtl_trans_reqt(msg.address, true, priv, edu->pdev.devfn,
                         !!(edu->process_info_msi & EDU_PROC_VALID),
                         (edu->process_info_msi >> EDU_PROC_PASID_OFFSET) & EDU_PROC_PASID_MASK);
     g_hash_table_insert(edu->edu_state_history, GINT_TO_POINTER(id), value);
