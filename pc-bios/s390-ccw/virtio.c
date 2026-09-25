@@ -61,7 +61,6 @@ char *virtio_get_ring_area(int ring_num)
 int drain_irqs(void)
 {
     switch (vdev.ipl_type) {
-    case S390_IPL_TYPE_QEMU_SCSI:
     case S390_IPL_TYPE_CCW:
         return drain_irqs_ccw(vdev.schid);
     default:
@@ -71,13 +70,19 @@ int drain_irqs(void)
 
 int virtio_run(VDev *vdev, int vqid, VirtioCmd *cmd)
 {
-    switch (vdev->ipl_type) {
-    case S390_IPL_TYPE_QEMU_SCSI:
-    case S390_IPL_TYPE_CCW:
-        return virtio_ccw_run(vdev, vqid, cmd);
-    default:
+    VRing *vr = &vdev->vrings[vqid];
+    int i = 0;
+
+    do {
+        vring_send_buf(vr, cmd[i].data, cmd[i].size,
+                       cmd[i].flags | (i ? VRING_HIDDEN_IS_CHAIN : 0));
+    } while (cmd[i++].flags & VRING_DESC_F_NEXT);
+
+    vring_wait_reply();
+    if (drain_irqs()) {
         return -1;
     }
+    return 0;
 }
 
 void vring_init(VRing *vr, VqInfo *info)
@@ -109,12 +114,12 @@ void vring_init(VRing *vr, VqInfo *info)
 bool vring_notify(VRing *vr)
 {
     switch (vdev.ipl_type) {
-    case S390_IPL_TYPE_QEMU_SCSI:
     case S390_IPL_TYPE_CCW:
         vr->cookie = virtio_ccw_notify(vdev.schid, vr->id, vr->cookie);
         break;
     case S390_IPL_TYPE_PCI:
-        vr->cookie = virtio_pci_notify(vr->id);
+        vr->cookie = virtio_pci_notify(vr);
+        break;
     default:
         return 1;
     }
@@ -129,7 +134,6 @@ bool vring_notify(VRing *vr)
 bool be_ipl(void)
 {
     switch (virtio_get_device()->ipl_type) {
-    case S390_IPL_TYPE_QEMU_SCSI:
     case S390_IPL_TYPE_CCW:
         return true;
     case S390_IPL_TYPE_PCI:
@@ -153,14 +157,14 @@ static void vr_bswap_descriptor(VRingDesc *desc)
 
 void vring_send_buf(VRing *vr, void *p, int len, int flags)
 {
-    if (!be_ipl()) {
-        vr->avail->idx = bswap16(vr->avail->idx);
-    }
+    uint16_t avail_idx;
+
+    avail_idx = be_ipl() ? vr->avail->idx : bswap16(vr->avail->idx);
 
     /* For follow-up chains we need to keep the first entry point */
     if (!(flags & VRING_HIDDEN_IS_CHAIN)) {
-        vr->avail->ring[vr->avail->idx % vr->num] = be_ipl() ? vr->next_idx :
-                                                               bswap16(vr->next_idx);
+        vr->avail->ring[avail_idx % vr->num] = be_ipl() ? vr->next_idx :
+                                                          bswap16(vr->next_idx);
     }
 
     vr->desc[vr->next_idx].addr = (unsigned long)p;
@@ -177,23 +181,23 @@ void vring_send_buf(VRing *vr, void *p, int len, int flags)
 
     /* Chains only have a single ID */
     if (!(flags & VRING_DESC_F_NEXT)) {
-        vr->avail->idx++;
-    }
-
-    if (!be_ipl()) {
-        vr->avail->idx = bswap16(vr->avail->idx);
+        avail_idx++;
+        vr->avail->idx = be_ipl() ? avail_idx : bswap16(avail_idx);
     }
 }
 
 int vr_poll(VRing *vr)
 {
-    if (vr->used->idx == vr->used_idx) {
+    uint16_t used_idx;
+
+    used_idx = be_ipl() ? vr->used->idx : bswap16(vr->used->idx);
+    if (used_idx == vr->used_idx) {
         vring_notify(vr);
         yield();
         return 0;
     }
 
-    vr->used_idx = vr->used->idx; /* Endianness is preserved */
+    vr->used_idx = used_idx;
     vr->next_idx = 0;
     vr->desc[0].len = 0;
     vr->desc[0].flags = 0;
@@ -230,7 +234,6 @@ int vring_wait_reply(void)
 int virtio_reset(VDev *vdev)
 {
     switch (vdev->ipl_type) {
-    case S390_IPL_TYPE_QEMU_SCSI:
     case S390_IPL_TYPE_CCW:
         return virtio_ccw_reset(vdev);
     case S390_IPL_TYPE_PCI:
@@ -243,9 +246,10 @@ int virtio_reset(VDev *vdev)
 bool virtio_is_supported(VDev *vdev)
 {
     switch (vdev->ipl_type) {
-    case S390_IPL_TYPE_QEMU_SCSI:
     case S390_IPL_TYPE_CCW:
         return virtio_ccw_is_supported(vdev);
+    case S390_IPL_TYPE_PCI:
+        return virtio_pci_is_supported(vdev);
     default:
         return false;
     }

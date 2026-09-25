@@ -25,7 +25,7 @@
 #include "trace.h"
 #include "standard-headers/drm/drm_fourcc.h"
 
-EGLDisplay *qemu_egl_display;
+EGLDisplay qemu_egl_display;
 EGLConfig qemu_egl_config;
 DisplayGLMode qemu_egl_mode;
 bool qemu_egl_angle_d3d;
@@ -432,7 +432,7 @@ void egl_dmabuf_release_texture(QemuDmaBuf *dmabuf)
     qemu_dmabuf_set_texture(dmabuf, 0);
 }
 
-void egl_dmabuf_create_sync(QemuDmaBuf *dmabuf)
+EGLSyncKHR egl_create_sync(void)
 {
     EGLSyncKHR sync;
 
@@ -443,23 +443,24 @@ void egl_dmabuf_create_sync(QemuDmaBuf *dmabuf)
         sync = eglCreateSyncKHR(qemu_egl_display,
                                 EGL_SYNC_NATIVE_FENCE_ANDROID, NULL);
         if (sync != EGL_NO_SYNC_KHR) {
-            qemu_dmabuf_set_sync(dmabuf, sync);
+            return sync;
         }
     }
+
+    return NULL;
 }
 
-void egl_dmabuf_create_fence(QemuDmaBuf *dmabuf)
+int egl_create_fence(EGLSyncKHR sync)
 {
-    void *sync = qemu_dmabuf_get_sync(dmabuf);
-    int fence_fd;
+    int fence_fd = -1;
 
     if (sync) {
         fence_fd = eglDupNativeFenceFDANDROID(qemu_egl_display,
                                               sync);
-        qemu_dmabuf_set_fence_fd(dmabuf, fence_fd);
         eglDestroySyncKHR(qemu_egl_display, sync);
-        qemu_dmabuf_set_sync(dmabuf, NULL);
     }
+
+    return fence_fd;
 }
 
 #endif /* CONFIG_GBM */
@@ -520,8 +521,8 @@ EGLSurface qemu_egl_init_surface_x11(EGLContext ectx, EGLNativeWindowType win)
  * platform extensions (EGL_KHR_platform_gbm and friends) yet it doesn't seem
  * like mesa will be able to advertise these (even though it can do EGL 1.5).
  */
-static EGLDisplay qemu_egl_get_display(EGLNativeDisplayType native,
-                                       EGLenum platform)
+EGLDisplay qemu_egl_get_display(EGLNativeDisplayType native,
+                                EGLenum platform)
 {
     EGLDisplay dpy = EGL_NO_DISPLAY;
 
@@ -732,4 +733,26 @@ bool egl_init(const char *rendernode, DisplayGLMode mode, Error **errp)
 
     display_opengl = 1;
     return true;
+}
+
+void egl_cleanup(void)
+{
+    if (qemu_egl_display) {
+        eglReleaseThread();
+    }
+
+    if (qemu_egl_rn_ctx) {
+        eglDestroyContext(qemu_egl_display, qemu_egl_rn_ctx);
+        qemu_egl_rn_ctx = NULL;
+    }
+
+    if (qemu_egl_display) {
+        eglTerminate(qemu_egl_display);
+        qemu_egl_display = NULL;
+    }
+
+#ifdef CONFIG_GBM
+    g_clear_pointer(&qemu_egl_rn_gbm_dev, gbm_device_destroy);
+    g_clear_fd(&qemu_egl_rn_fd, NULL);
+#endif
 }

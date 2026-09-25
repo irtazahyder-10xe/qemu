@@ -13,7 +13,7 @@ Most (but not all) tests are also integrated as an automated test into
 the meson build system so can be run directly from the build tree,
 for example::
 
-  [./pyvenv/bin/]meson test --suite qemu:softfloat
+  ./run meson test --suite qemu:softfloat
 
 will run just the softfloat tests.
 
@@ -51,6 +51,21 @@ Different sub-types of "make check" tests will be explained below.
 Before running tests, it is best to build QEMU programs first. Some tests
 expect the executables to exist and will fail with obscure messages if they
 cannot find them.
+
+The timeouts for QEMU tests are set conservatively so you should not
+in general find that tests time out. However, if you are running on a
+particularly slow host or with a slow configuration (such as a build
+with the clang address-sanitizer enabled) you can globally raise all
+the timeouts, by setting the ``TIMEOUT_MULTIPLIER`` environment
+variable. For instance:
+
+.. code::
+
+ TIMEOUT_MULTIPLIER=3 make check
+
+will run with all the default timeouts multiplied by three. You can
+also disable timeouts entirely by setting the environment variable to
+``0``.
 
 .. _unit-tests:
 
@@ -221,9 +236,29 @@ same commit that alters the generator code.
 check-block
 ~~~~~~~~~~~
 
-``make check-block`` runs a subset of the block layer iotests (the tests that
-are in the "auto" group).
-See the "QEMU iotests" section below for more information.
+There are a variety of ways to exercise the block layer I/O tests
+via make targets for a selection of formats / protocols (collectively
+referred to as ``drivers`` below).
+
+A default ``make check`` or ``make check-block`` command will exercise
+the ``qcow2`` format, using the tests tagged into the ``auto`` group
+only.
+
+These targets accept the ``SPEED`` variable to augment the set of tests
+to run. A slightly more comprehensive test plan can be run by defining
+``SPEED=slow``, which enables all tests for the ``qcow2`` and ``raw``
+drivers. The most comprehensive test plan can be run by defining
+``SPEED=thorough``, which enables all available tests for the drivers
+``luks``, ``nbd``, ``parallels``, ``qcow2``, ``qed``, ``raw``, ``vdi``,
+``vhdx``, ``vmdk``, and ``vpc``.
+
+Each of drivers also has its own dedicated make target, named
+``make check-block-$DRIVER`` which will run all available tests for
+the designated driver and does not require the ``SPEED`` variable
+to be set.
+
+See the "QEMU iotests" section below for more information on the
+block I/O test framework that is leveraged by these ``make`` targets.
 
 .. _qemu-iotests:
 
@@ -516,8 +551,8 @@ mappings to distribution package names for a wide variety of third
 party projects.  ``lcitool`` applies the mappings to a list of build
 pre-requisites in ``tests/lcitool/projects/qemu.yml``, determines the
 list of native packages to install on each distribution, and uses them
-to generate build environments (dockerfiles and Cirrus CI variable files)
-that are consistent across OS distribution.
+to generate build environments (dockerfiles) that are consistent across OS
+distribution.
 
 
 Adding new build pre-requisites
@@ -676,13 +711,13 @@ https://github.com/google/sanitizers/wiki/ThreadSanitizerCppManual
 
 Thread Sanitizer in Docker
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
-TSan is currently supported in the ubuntu2204 docker.
+TSan is currently supported in all our host docker images (for instance, ubuntu2404).
 
 The test-tsan test will build using TSan and then run make check.
 
 .. code::
 
-  make docker-test-tsan@ubuntu2204
+  make docker-test-tsan@ubuntu2404
 
 TSan warnings under docker are placed in files located at build/tsan/.
 
@@ -959,6 +994,9 @@ Python. You can run the functional tests simply by executing:
 
 See :ref:`checkfunctional-ref` for more details.
 
+The harness for the functional tests also honours the
+``TIMEOUT_MULTIPLIER`` environment variable.
+
 .. _checktcg-ref:
 
 Testing with "make check-tcg"
@@ -997,29 +1035,40 @@ See :ref:`container-ref` for more details.
 Running subset of tests
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-You can build the tests for one architecture::
+You can build the tcg tests using::
 
-  make build-tcg-tests-$TARGET
+  make tcg-tests
 
-And run with::
+And run them for one target with::
 
-  make run-tcg-tests-$TARGET
+  make check-tcg-$TARGET
 
 Adding ``V=1`` to the invocation will show the details of how to
 invoke QEMU for the test which is useful for debugging tests.
 
+Tests can also be run using directly meson test::
+
+  ./run meson test --suite tcg
+  ./run meson test --suite tcg-$TARGET
+
+Tests can be listed using::
+
+  ./run meson test --suite tcg --list
+
 Running individual tests
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
-Tests can also be run directly from the test build directory. If you
-run ``make help`` from the test build directory you will get a list of
-all the tests that can be run. Please note that same binaries are used
-in multiple tests, for example::
+Tests can also be run using directly meson test::
 
-  make run-plugin-test-mmap-with-libinline.so
+  ./run meson test $TARGET-$TEST
 
-will run the mmap test with the ``libinline.so`` TCG plugin. The
-gdbstub tests also re-use the test binaries but while exercising gdb.
+For instance::
+
+  ./run meson test aarch64-softmmu-hello
+
+Test command and output can be accessed by using verbose flag::
+
+  ./run meson test aarch64-softmmu-hello --verbose
 
 TCG test dependencies
 ~~~~~~~~~~~~~~~~~~~~~
