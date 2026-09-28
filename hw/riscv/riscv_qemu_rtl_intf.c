@@ -108,8 +108,8 @@ MemTxResult rtl_mmio_rmw(hwaddr addr, bool is_write, bool is_8bytes,
     return MEMTX_OK;
 }
 
-#define LTI_ID_DEVICE_ID_BITS 8
-#define LTI_ID_DEVICE_ID_MASK ((1 << LTI_ID_DEVICE_ID_BITS) - 1)
+#define LTI_ID_DEVICE_ID_BITS 32
+#define LTI_ID_DEVICE_ID_MASK ((1ULL << LTI_ID_DEVICE_ID_BITS) - 1)
 
 /*
  * GHashTable to store device id's and their corresponding EDUState
