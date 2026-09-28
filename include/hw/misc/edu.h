@@ -72,6 +72,7 @@ struct EduState {
     /* 31        12     3   2   1   0 */
     uint32_t process_info_dma;
     uint32_t process_info_msi;
+    uint32_t dev_id;
 };
 
 void edu_perform_dma(void *opaque, lti_LR_s resp);

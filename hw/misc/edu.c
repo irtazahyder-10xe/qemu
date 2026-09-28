@@ -85,7 +85,7 @@ static void edu_msi_trans(PCIDevice *dev, unsigned int vector)
 
     memcpy(&value->msi, &msg, sizeof(MSIMessage));
     value->is_msi = true;
-    id = rtl_trans_reqt(msg.address, true, priv, edu->pdev.devfn,
+    id = rtl_trans_reqt(msg.address, true, priv, edu->dev_id,
                         !!(edu->process_info_msi & EDU_PROC_VALID),
                         (edu->process_info_msi >> EDU_PROC_PASID_OFFSET) & EDU_PROC_PASID_MASK);
     g_hash_table_insert(edu->edu_state_history, GINT_TO_POINTER(id), value);
@@ -265,7 +265,7 @@ static void edu_dma_timer(void *opaque)
     value->is_msi = false;
     id = rtl_trans_reqt(edu_clamp_addr(edu, dma_to_pci ? edu->dma.dst : edu->dma.src),
                         EDU_DMA_DIR(edu->dma.cmd) == EDU_DMA_TO_PCI,
-                        priv, edu->pdev.devfn,
+                        priv, edu->dev_id,
                         !!(edu->process_info_dma & EDU_PROC_VALID),
                         (edu->process_info_dma >> EDU_PROC_PASID_OFFSET) & EDU_PROC_PASID_MASK);
     g_hash_table_insert(edu->edu_state_history, GINT_TO_POINTER(id), value);
@@ -511,9 +511,9 @@ static void pci_edu_realize(PCIDevice *pdev, Error **errp)
     pci_register_bar(pdev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY, &edu->mmio);
     edu->edu_state_history = g_hash_table_new_full(NULL, NULL, NULL, free);
 
-    uint64_t dev_id = edu->pdev.devfn;
-    if (!insert_edu_dev_state(dev_id, OBJECT(edu))) {
-        error_report("Unable to write to GHashTable for device: %lu\n", dev_id);
+    edu->dev_id = PCI_BUILD_BDF(pci_bus_num(pci_get_bus(&edu->pdev)), edu->pdev.devfn);
+    if (!insert_edu_dev_state(edu->dev_id, OBJECT(edu))) {
+        error_report("Unable to write to GHashTable for device: %u\n", edu->dev_id);
     }
 }
 
@@ -538,7 +538,7 @@ static void edu_instance_finalize(Object *obj)
 {
     EduState *edu = EDU(obj);
     g_hash_table_destroy(edu->edu_state_history);
-    remove_edu_dev_state(edu->pdev.devfn);
+    remove_edu_dev_state(edu->dev_id);
 }
 
 static void edu_instance_init(Object *obj)
