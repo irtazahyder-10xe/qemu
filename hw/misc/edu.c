@@ -158,7 +158,8 @@ void edu_perform_dma(void *opaque, lti_LR_s resp)
         return;
     }
 
-    trace_edu_perform_dma_ghash_entry(entry->is_msi ? "MSI" : "DMA",
+    trace_edu_perform_dma_ghash_entry((uintptr_t) edu,
+                                      entry->is_msi ? "MSI" : "DMA",
                                       entry->dma.src,
                                       entry->dma.dst,
                                       entry->dma.cnt,
