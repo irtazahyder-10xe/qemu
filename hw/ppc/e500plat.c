@@ -42,7 +42,7 @@ static void e500plat_init(MachineState *machine)
     ppce500_init(machine);
 }
 
-static void e500plat_machine_device_plug_cb(HotplugHandler *hotplug_dev,
+static void e500plat_machine_device_plug_cb(const HotplugHandler *hotplug_dev,
                                             DeviceState *dev, Error **errp)
 {
     PPCE500MachineState *pms = PPCE500_MACHINE(hotplug_dev);
@@ -53,7 +53,7 @@ static void e500plat_machine_device_plug_cb(HotplugHandler *hotplug_dev,
     }
 }
 
-static
+static const
 HotplugHandler *e500plat_machine_get_hotpug_handler(MachineState *machine,
                                                     DeviceState *dev)
 {
@@ -94,6 +94,7 @@ static void e500plat_machine_class_init(ObjectClass *oc, const void *data)
     pmc->pci_mmio_bus_base = 0xE0000000ULL;
     pmc->spin_base = 0xFEF000000ULL;
     pmc->clock_freq = PLATFORM_CLK_FREQ_HZ;
+    pmc->bus_freq = PLATFORM_CLK_FREQ_HZ;
     pmc->tb_freq = PLATFORM_CLK_FREQ_HZ;
 
     mc->desc = "generic paravirt e500 platform";

@@ -24,14 +24,6 @@ const char *target_name(void);
 unsigned target_long_bits(void);
 
 /**
- * target_machine_typename:
- *
- * Returns: Name of the QOM interface implemented by machines
- *          usable on this target binary.
- */
-const char *target_machine_typename(void);
-
-/**
  * target_cpu_type:
  *
  * Returns: target CPU base QOM type name (i.e. TYPE_X86_CPU).
@@ -98,5 +90,12 @@ bool target_ppc64(void);
  * Returns whether the target architecture is S390x.
  */
 bool target_s390x(void);
+
+/**
+ * target_riscv64:
+ *
+ * Returns whether the target architecture is riscv64
+ */
+bool target_riscv64(void);
 
 #endif

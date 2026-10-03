@@ -14,6 +14,7 @@
 #include "exec/hwaddr.h"
 #include "exec/cpu-common.h"
 #include "exec/cpu-interrupt.h"
+#include "system/physmem.h"
 #include "system/system.h"
 #include "system/qtest.h"
 #include "hw/core/irq.h"
@@ -29,6 +30,7 @@
 #include "hw/core/qdev-properties.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
+#include "qemu/log.h"
 #include "ui/console.h"
 #include "target/m68k/cpu.h"
 #include "migration/vmstate.h"
@@ -585,7 +587,7 @@ static void nextdma_write(void *opaque, uint8_t *buf, int size, int type)
         base_addr = next_state->dma[type].next_initbuf;
     }
 
-    cpu_physical_memory_write(base_addr, buf, size);
+    physical_memory_write(base_addr, buf, size);
 
     next_state->dma[type].next_initbuf = 0;
 
@@ -619,8 +621,7 @@ static void nextdma_write(void *opaque, uint8_t *buf, int size, int type)
 
 static void nextscsi_read(void *opaque, uint8_t *buf, int len)
 {
-    DPRINTF("SCSI READ: %x\n", len);
-    abort();
+    qemu_log_mask(LOG_UNIMP, "nextscsi_read with len = %d\n", len);
 }
 
 static void nextscsi_write(void *opaque, uint8_t *buf, int size)
@@ -824,13 +825,14 @@ static void next_floppy_write(void *opaque, hwaddr addr, uint64_t val,
         break;
 
     default:
-        g_assert_not_reached();
+        qemu_log_mask(LOG_UNIMP, "next_floppy_write at addr 0x%"HWADDR_PRIx"\n",
+                      addr);
     }
 }
 
 static uint64_t next_floppy_read(void *opaque, hwaddr addr, unsigned size)
 {
-    uint64_t val;
+    uint64_t val = 0;
 
     switch (addr) {
     case 0:
@@ -839,7 +841,8 @@ static uint64_t next_floppy_read(void *opaque, hwaddr addr, unsigned size)
         break;
 
     default:
-        g_assert_not_reached();
+        qemu_log_mask(LOG_UNIMP, "next_floppy_read at addr 0x%"HWADDR_PRIx"\n",
+                      addr);
     }
 
     return val;

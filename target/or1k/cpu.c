@@ -170,7 +170,7 @@ static void openrisc_cpu_realizefn(DeviceState *dev, Error **errp)
     OpenRISCCPUClass *occ = OPENRISC_CPU_GET_CLASS(dev);
     Error *local_err = NULL;
 
-    cpu_exec_realizefn(cs, &local_err);
+    cpu_common_realize(cs, &local_err);
     if (local_err != NULL) {
         error_propagate(errp, local_err);
         return;
@@ -247,7 +247,7 @@ static void openrisc_any_initfn(Object *obj)
 
 static const struct SysemuCPUOps openrisc_sysemu_ops = {
     .has_work = openrisc_cpu_has_work,
-    .get_phys_page_debug = openrisc_cpu_get_phys_page_debug,
+    .get_phys_addr_debug = openrisc_cpu_get_phys_addr_debug,
 };
 #endif
 

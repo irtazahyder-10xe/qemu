@@ -606,6 +606,66 @@ static inline bool umul64_overflow(uint64_t x, uint64_t y, uint64_t *ret)
     return __builtin_mul_overflow(x, y, ret);
 }
 
+/**
+ * sadd32_saturate - 32-bit signed addition with saturation
+ * @x, @y: addends
+ *
+ * Computes @x + @y, and saturates rather than truncating the result.
+ */
+static inline int32_t sadd32_saturate(int32_t x, int32_t y)
+{
+    int32_t ret;
+    if (sadd32_overflow(x, y, &ret)) {
+        ret = y < 0 ? INT32_MIN : INT32_MAX;
+    }
+    return ret;
+}
+
+/**
+ * sadd64_saturate - 64-bit signed addition with saturation
+ * @x, @y: addends
+ *
+ * Computes @x + @y, and saturates rather than truncating the result.
+ */
+static inline int64_t sadd64_saturate(int64_t x, int64_t y)
+{
+    int64_t ret;
+    if (sadd64_overflow(x, y, &ret)) {
+        ret = y < 0 ? INT64_MIN : INT64_MAX;
+    }
+    return ret;
+}
+
+/**
+ * ssub32_saturate - 32-bit signed subtraction with saturation
+ * @x, @y: addends
+ *
+ * Computes @x - @y, and saturates rather than truncating the result.
+ */
+static inline int32_t ssub32_saturate(int32_t x, int32_t y)
+{
+    int32_t ret;
+    if (ssub32_overflow(x, y, &ret)) {
+        ret = x < 0 ? INT32_MIN : INT32_MAX;
+    }
+    return ret;
+}
+
+/**
+ * ssub64_saturate - 64-bit signed subtraction with saturation
+ * @x, @y: addends
+ *
+ * Computes @x - @y, and saturates rather than truncating the result.
+ */
+static inline int64_t ssub64_saturate(int64_t x, int64_t y)
+{
+    int64_t ret;
+    if (ssub64_overflow(x, y, &ret)) {
+        ret = x < 0 ? INT64_MIN : INT64_MAX;
+    }
+    return ret;
+}
+
 /*
  * Unsigned 128x64 multiplication.
  * Returns true if the result got truncated to 128 bits.

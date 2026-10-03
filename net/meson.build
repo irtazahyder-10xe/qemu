@@ -8,7 +8,6 @@ system_ss.add(files(
   'filter-mirror.c',
   'filter.c',
   'hub.c',
-  'net-hmp-cmds.c',
   'net.c',
   'queue.c',
   'socket.c',
@@ -16,6 +15,9 @@ system_ss.add(files(
   'stream_data.c',
   'util.c',
 ))
+if have_hmp
+  system_ss.add(files('net-hmp-cmds.c'))
+endif
 
 if get_option('replication').allowed() or \
     get_option('colo_proxy').allowed()
@@ -46,8 +48,9 @@ endif
 system_ss.add(when: [libxdp, libbpf], if_true: files('af-xdp.c'))
 
 if have_vhost_net_user
-  system_ss.add(when: 'CONFIG_VIRTIO_NET', if_true: files('vhost-user.c'), if_false: files('vhost-user-stub.c'))
+  system_ss.add(when: 'CONFIG_VIRTIO_NET', if_true: files('vhost-user.c'))
 endif
+stub_ss.add(files('vhost-user-stub.c'))
 
 if host_os == 'windows'
   system_ss.add(files('tap-win32.c'))
@@ -61,8 +64,9 @@ else
   system_ss.add(files('tap.c', 'tap-stub.c'))
 endif
 if have_vhost_net_vdpa
-  system_ss.add(when: 'CONFIG_VIRTIO_NET', if_true: files('vhost-vdpa.c'), if_false: files('vhost-vdpa-stub.c'))
+  system_ss.add(when: 'CONFIG_VIRTIO_NET', if_true: files('vhost-vdpa.c'))
 endif
+stub_ss.add(files('vhost-vdpa-stub.c'))
 
 vmnet_files = files(
   'vmnet-common.m',

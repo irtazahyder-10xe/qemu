@@ -10,7 +10,6 @@
 
 #include "qemu/int128.h"
 #include "exec/cpu-common.h"
-#include "exec/cpu-defs.h"
 #include "exec/cpu-interrupt.h"
 #include "fpu/softfloat-types.h"
 #include "hw/core/registerfields.h"
@@ -302,6 +301,7 @@ enum loongarch_features {
     LOONGARCH_FEATURE_PV_IPI,
     LOONGARCH_FEATURE_STEALTIME,
     LOONGARCH_FEATURE_PTW,
+    LOONGARCH_FEATURE_MSGINT,
 };
 
 typedef struct  LoongArchBT {
@@ -315,24 +315,16 @@ typedef struct  LoongArchBT {
     uint32_t ftop;
 } lbt_t;
 
+typedef struct CPUTimerState {
+    QEMUTimer timer;
+    int irq;
+    CPUState *cs;
+} CPUTimerState;
+
 #define CPU_VENDOR_LOONGSON   "Loongson"
 #define CPU_MODEL_3A5000      "3A5000"
 #define CPU_MODEL_1C101       "1C101"
-
-typedef struct CPUArchState {
-    uint64_t gpr[32];
-    uint64_t pc;
-
-    fpr_t fpr[32];
-    bool cf[8];
-    uint32_t fcsr0;
-    lbt_t  lbt;
-
-    uint32_t cpucfg[21];
-    uint32_t pv_features;
-    uint64_t vendor_id;
-    uint64_t cpu_id;
-
+typedef struct CPUSysState {
     /* LoongArch CSRs */
     uint64_t CSR_CRMD;
     uint64_t CSR_PRMD;
@@ -348,7 +340,6 @@ typedef struct CPUArchState {
     uint64_t CSR_TLBEHI;
     uint64_t CSR_TLBELO0;
     uint64_t CSR_TLBELO1;
-    uint64_t CSR_ASID;
     uint64_t CSR_PGDL;
     uint64_t CSR_PGDH;
     uint64_t CSR_PGD;
@@ -357,9 +348,6 @@ typedef struct CPUArchState {
     uint64_t CSR_STLBPS;
     uint64_t CSR_RVACFG;
     uint64_t CSR_CPUID;
-    uint64_t CSR_PRCFG1;
-    uint64_t CSR_PRCFG2;
-    uint64_t CSR_PRCFG3;
     uint64_t CSR_SAVE[16];
     uint64_t CSR_TID;
     uint64_t CSR_TCFG;
@@ -394,10 +382,31 @@ typedef struct CPUArchState {
     uint64_t CSR_MSGIS[N_MSGIS];
     uint64_t CSR_MSGIR;
     uint64_t CSR_MSGIE;
+
+    /* Fields up to this point are cleared by a CPU reset */
+    struct {} end_reset_fields;
+
+    uint64_t CSR_ASID;
+    uint64_t CSR_PRCFG1;
+    uint64_t CSR_PRCFG2;
+    uint64_t CSR_PRCFG3;
+#ifdef CONFIG_TCG
+    CPUTimerState timer_state;
+#endif
+} CPUSysState;
+
+typedef struct CPUArchState {
+    uint64_t gpr[32];
+    uint64_t pc;
+
+    fpr_t fpr[32];
+    bool cf[8];
+    uint32_t fcsr0;
+    lbt_t  lbt;
+
     struct {
         uint64_t guest_addr;
     } stealtime;
-    uint32_t perf_event_num;
 
 #ifdef CONFIG_TCG
     float_status fp_status;
@@ -407,15 +416,27 @@ typedef struct CPUArchState {
     uint64_t llval_high; /* For 128-bit atomic SC.Q */
     uint64_t llbit_scq; /* Potential LL.D+LD.D+SC.Q sequence in effect */
     uint64_t hw_pte_mask; /* Mask of architecturally-defined (hardware) PTE bits. */
-#endif
+
 #ifndef CONFIG_USER_ONLY
-#ifdef CONFIG_TCG
     LoongArchTLB  tlb[LOONGARCH_TLB_MAX];
 #endif
+#endif
 
+    /* Fields up to this point are cleared by a CPU reset */
+    struct {} end_reset_fields;
+
+    CPUSysState sys_states[1];
+    uint32_t cpucfg[21];
+    uint32_t pv_features;
+    uint64_t vendor_id;
+    uint64_t cpu_id;
+    uint32_t perf_event_num;
+
+#ifndef CONFIG_USER_ONLY
     AddressSpace *address_space_iocsr;
     uint32_t mp_state;
 #endif
+    CPUSysState *sys_state;
 } CPULoongArchState;
 
 typedef struct LoongArchCPUTopo {
@@ -434,7 +455,6 @@ struct ArchCPU {
     CPUState parent_obj;
 
     CPULoongArchState env;
-    QEMUTimer timer;
     uint32_t  phy_id;
     OnOffAuto lbt;
     OnOffAuto pmu;
@@ -482,6 +502,21 @@ struct LoongArchCPUClass {
 #define MMU_USER_IDX     MMU_PLV_USER
 #define MMU_DA_IDX       4
 
+static inline CPUSysState *env_sys(CPULoongArchState *env)
+{
+    return env->sys_state;
+}
+
+static inline void set_sys_state(CPULoongArchState *env, CPUSysState *sys)
+{
+    env->sys_state = sys;
+}
+
+static inline CPUTimerState *env_timer(CPULoongArchState *env)
+{
+    return &env->sys_states[0].timer_state;
+}
+
 static inline bool is_la64(CPULoongArchState *env)
 {
     return FIELD_EX32(env->cpucfg[1], CPUCFG1, ARCH) == CPUCFG1_ARCH_LA64;
@@ -491,8 +526,9 @@ static inline bool is_va32(CPULoongArchState *env)
 {
     /* VA32 if !LA64 or VA32L[1-3] */
     bool va32 = !is_la64(env);
-    uint64_t plv = FIELD_EX64(env->CSR_CRMD, CSR_CRMD, PLV);
-    if (plv >= 1 && (FIELD_EX64(env->CSR_MISC, CSR_MISC, VA32) & (1 << plv))) {
+    CPUSysState *sys = env_sys(env);
+    uint64_t plv = FIELD_EX64(sys->CSR_CRMD, CSR_CRMD, PLV);
+    if (plv >= 1 && (FIELD_EX64(sys->CSR_MISC, CSR_MISC, VA32) & (1 << plv))) {
         va32 = true;
     }
     return va32;

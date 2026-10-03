@@ -59,8 +59,7 @@ static int ipmi_do_hw_op(IPMIInterface *s, enum ipmi_op op, int checkonly)
         if (checkonly) {
             return 0;
         }
-        /* We don't care what CPU we use. */
-        nmi_monitor_handle(0, NULL);
+        nmi_inject(NULL);
         return 0;
 
     case IPMI_SHUTDOWN_VIA_ACPI_OVERTEMP:
@@ -97,8 +96,14 @@ static void isa_ipmi_bmc_check(const Object *obj, const char *name,
 {
     IPMIBmc *bmc = IPMI_BMC(val);
 
-    if (bmc->intf)
+    if (!bmc) {
+        error_setg(errp, "%s cannot be set to NULL", name);
+        return;
+    }
+
+    if (bmc->intf) {
         error_setg(errp, "BMC object is already in use");
+    }
 }
 
 void ipmi_bmc_find_and_link(Object *obj, Object **bmc)

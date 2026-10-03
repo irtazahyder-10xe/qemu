@@ -1075,7 +1075,7 @@ static int vfio_legacy_pci_hot_reset(VFIODevice *vbasedev, bool single)
 
         /* Prep dependent devices for reset and clear our marker. */
         QLIST_FOREACH(vbasedev_iter, &group->device_list, next) {
-            if (!vbasedev_iter->dev->realized ||
+            if (!qdev_is_realized(vbasedev_iter->dev) ||
                 !vfio_pci_from_vfio_device(vbasedev_iter)) {
                 continue;
             }
@@ -1160,7 +1160,7 @@ out:
         }
 
         QLIST_FOREACH(vbasedev_iter, &group->device_list, next) {
-            if (!vbasedev_iter->dev->realized ||
+            if (!qdev_is_realized(vbasedev_iter->dev) ||
                 !vfio_pci_from_vfio_device(vbasedev_iter)) {
                 continue;
             }
@@ -1244,12 +1244,12 @@ static void vfio_iommu_legacy_instance_init(Object *obj)
 
 static void hiod_legacy_vfio_class_init(ObjectClass *oc, const void *data)
 {
-    HostIOMMUDeviceClass *hioc = HOST_IOMMU_DEVICE_CLASS(oc);
+    HostIOMMUDeviceClass *hiodc = HOST_IOMMU_DEVICE_CLASS(oc);
 
-    hioc->realize = hiod_legacy_vfio_realize;
-    hioc->get_cap = hiod_legacy_vfio_get_cap;
-    hioc->get_iova_ranges = hiod_legacy_vfio_get_iova_ranges;
-    hioc->get_page_size_mask = hiod_legacy_vfio_get_page_size_mask;
+    hiodc->realize = hiod_legacy_vfio_realize;
+    hiodc->get_cap = hiod_legacy_vfio_get_cap;
+    hiodc->get_iova_ranges = hiod_legacy_vfio_get_iova_ranges;
+    hiodc->get_page_size_mask = hiod_legacy_vfio_get_page_size_mask;
 };
 
 static const TypeInfo types[] = {
