@@ -161,7 +161,9 @@ static void vfu_object_set_socket(Object *obj, Visitor *v, const char *name,
 
     o->socket = NULL;
 
-    visit_type_SocketAddress(v, name, &o->socket, errp);
+    if (!visit_type_SocketAddress(v, name, &o->socket, errp)) {
+        return;
+    }
 
     if (o->socket->type != SOCKET_ADDRESS_TYPE_UNIX) {
         error_setg(errp, "vfu: Unsupported socket type - %s",
@@ -373,9 +375,9 @@ static int vfu_object_mr_rw(MemoryRegion *mr, uint8_t *buf, hwaddr offset,
         ram_ptr = memory_region_get_ram_ptr(mr);
 
         if (is_write) {
-            memcpy((ram_ptr + offset), buf, size);
+            qemu_ram_move((ram_ptr + offset), buf, size);
         } else {
-            memcpy(buf, (ram_ptr + offset), size);
+            qemu_ram_move(buf, (ram_ptr + offset), size);
         }
 
         return 0;
@@ -798,7 +800,8 @@ static void vfu_object_init_ctx(VfuObject *o, Error **errp)
         goto fail;
     }
 
-    ret = vfu_setup_device_dma(o->vfu_ctx, &dma_register, &dma_unregister);
+    ret = vfu_setup_device_dma(o->vfu_ctx, LIBVFIO_USER_MAX_DMA_REGIONS,
+                               &dma_register, &dma_unregister);
     if (ret < 0) {
         error_setg(errp, "vfu: Failed to setup DMA handlers for %s",
                    o->device);

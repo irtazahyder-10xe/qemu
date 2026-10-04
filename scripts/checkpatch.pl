@@ -368,6 +368,7 @@ our @typeList = (
 # Match text found in common license boilerplate comments:
 # for new files the SPDX-License-Identifier line is sufficient.
 our @LICENSE_BOILERPLATE = (
+	"licensed under the GPL version 2",
 	"licensed under the terms of the GNU GPL",
 	"under the terms of the GNU General Public License",
 	"under the terms of the GNU Lesser General Public",
@@ -1538,6 +1539,8 @@ sub process {
 
 	our $clean = 1;
 	my $signoff = 0;
+	my $author_email = '';
+	my %commit_trailers = ();
 	my $is_patch = 0;
 
 	my $in_header_lines = $file ? 0 : 1;
@@ -1794,6 +1797,14 @@ sub process {
 		    ERROR("Author email address is mangled by the mailing list\n" . $herecurr);
 		}
 
+# Extract author email for trailer checks
+		if ($in_header_lines && $line =~ /^(?:Author|From):\s*(.*)/) {
+			my $author_info = $1;
+			if ($author_info =~ /<([^>]+)>/) {
+				$author_email = $1;
+			}
+		}
+
 #check the patch for a signoff:
 		if ($line =~ /^\s*signed-off-by:/i) {
 			# This is a signoff, if ugly, so do not double report.
@@ -1806,6 +1817,40 @@ sub process {
 			}
 			if ($line =~ /^\s*signed-off-by:\S/i) {
 				ERROR("space required after Signed-off-by:\n" .
+					$herecurr);
+			}
+		}
+
+# Reject trailers that credit an AI agent.
+		if ($realfile =~ /^$/ &&
+		    ($line =~ /🤖/ ||
+		     $line =~ /^\s*(?:Assisted|Generated)-by:/i ||
+		     ($line =~ /^\s*Co-authored-by:\s*(.*?)\s*$/i &&
+		      $1 =~ /\bcopilot\b | \bchatgpt\b | \bcodex\b | \bcursor\b |
+			     \bgemini\b | \bllama\b | \bnoreply\b | \[bot\] |
+			     \bclaude\b.*(?:opus|sonnet|fable|haiku|anthropic\.com)/xi))) {
+			ERROR("QEMU does not allow using AI for contributions, " .
+				"see docs/devel/code-provenance.rst\n" . $herecurr);
+		}
+
+# Check for duplicate trailers and self-review
+		if (!$in_header_lines &&
+		    $line =~ /^\s*([A-Z][a-zA-Z]*(?:-[a-zA-Z]+)*):\s*(.+)/) {
+			my $trailer_type = $1;
+			my $trailer_value = $2;
+			$trailer_value =~ s/\s+$//;
+			my $trailer_key = lc("$trailer_type: $trailer_value");
+
+			if (exists $commit_trailers{$trailer_key}) {
+				WARN("Duplicate '$trailer_type' trailer\n" .
+					$herecurr);
+			}
+			$commit_trailers{$trailer_key} = 1;
+
+			if ($trailer_type =~ /^(?:Reviewed|Tested|Acked)-by$/ &&
+			    $author_email ne '' &&
+			    $trailer_value =~ /<\Q$author_email\E>/i) {
+				WARN("$trailer_type from the patch author\n" .
 					$herecurr);
 			}
 		}
@@ -2282,7 +2327,8 @@ sub process {
 			#print "line<$line> prevline<$prevline> indent<$indent> sindent<$sindent> check<$check> continuation<$continuation> s<$s> cond_lines<$cond_lines> stat_real<$stat_real> stat<$stat>\n";
 
 			if ($check && (($sindent % 4) != 0 ||
-			    ($sindent <= $indent && $s ne ''))) {
+			    ($sindent <= $indent &&
+			     $s !~ /^\s*(?:\}|\{|else\b)/))) {
 				ERROR("suspect code indent for conditional statements ($indent, $sindent)\n" . $herecurr . "$stat_real\n");
 			}
 		}
@@ -2421,7 +2467,8 @@ sub process {
 #  3. inside a curly brace -- = { [0...10] = 5 }
 #  4. after a comma -- [1] = 5, [2] = 6
 #  5. in a macro definition -- #define abc(x) [x] = y
-		while ($line =~ /(.*?\s)\[/g) {
+		my $cpp = $realfile =~ /(\.cpp)$/;
+		while (!$cpp && $line =~ /(.*?\s)\[/g) {
 			my ($where, $prefix) = ($-[1], $1);
 			if ($prefix !~ /$Type\s+$/ &&
 			    ($where != 0 || $prefix !~ /^.\s+$/) &&
@@ -2441,6 +2488,7 @@ sub process {
 			if ($name =~ /^(?:
 				if|for|while|switch|return|case|
 				volatile|__volatile__|coroutine_fn|
+				coroutine_mixed_fn|no_coroutine_fn|
 				__attribute__|format|__extension__|
 				asm|__asm__)$/x)
 			{
@@ -2616,6 +2664,31 @@ sub process {
 
 						# Ignore :: in C++
 						if ($op eq '::') {
+							$ok = 1;
+						}
+
+						# Ignore * in C++: templates and
+						# pointer types are incorrectly
+						# flagged. Example:
+						# static_cast<T*>
+						if ($op eq '*') {
+							$ok = 1;
+						}
+
+						# Ignore & in C++: & means a
+						# reference, and this create
+						# issues with some constructions.
+						# Example:
+						# auto &[first, second] = pair;
+						if ($op eq '&') {
+							$ok = 1;
+						}
+
+						# Ignore >> in C++
+						# checkpatch is confused by
+						# >> closing templates. Example:
+						# vector<pair<A, B>>
+						if ($op eq '>>') {
 							$ok = 1;
 						}
 					}

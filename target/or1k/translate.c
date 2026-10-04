@@ -502,6 +502,20 @@ static bool trans_l_extbz(DisasContext *dc, arg_da *a)
     return true;
 }
 
+static bool trans_l_extws(DisasContext *dc, arg_da *a)
+{
+    check_r0_write(dc, a->d);
+    tcg_gen_mov_i32(cpu_R(dc, a->d), cpu_R(dc, a->a));
+    return true;
+}
+
+static bool trans_l_extwz(DisasContext *dc, arg_da *a)
+{
+    check_r0_write(dc, a->d);
+    tcg_gen_mov_i32(cpu_R(dc, a->d), cpu_R(dc, a->a));
+    return true;
+}
+
 static bool trans_l_cmov(DisasContext *dc, arg_dab *a)
 {
     check_r0_write(dc, a->d);
@@ -1647,7 +1661,8 @@ void openrisc_translate_code(CPUState *cs, TranslationBlock *tb,
     DisasContext ctx;
 
     translator_loop(cs, tb, max_insns, pc, host_pc,
-                    &openrisc_tr_ops, &ctx.base);
+                    &openrisc_tr_ops, &ctx.base,
+                    TCG_TYPE_VA);
 }
 
 void openrisc_cpu_dump_state(CPUState *cs, FILE *f, int flags)

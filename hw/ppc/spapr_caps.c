@@ -129,7 +129,7 @@ static void spapr_cap_set_string(Object *obj, Visitor *v, const char *name,
         return;
     }
     for (i = 0; i < cap->possible->num; i++) {
-        if (!strcasecmp(val, cap->possible->vals[i])) {
+        if (!g_ascii_strcasecmp(val, cap->possible->vals[i])) {
             spapr->cmd_line_caps[cap->index] = true;
             spapr->eff.caps[cap->index] = i;
             return;
@@ -676,7 +676,7 @@ static void cap_ail_mode_3_apply(SpaprMachineState *spapr,
 
     if (tcg_enabled()) {
         /* AIL-3 is only supported on POWER8 and above CPUs. */
-        if (!(pcc->insns_flags2 & PPC2_ISA207S)) {
+        if (!(pcc->insns_flags2 & PPC2_ISA207)) {
             error_setg(errp, "TCG only supports cap-ail-mode-3 on POWER8 and later CPUs");
             error_append_hint(errp, "Try appending -machine cap-ail-mode-3=off\n");
             return;

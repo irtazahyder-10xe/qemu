@@ -36,6 +36,7 @@
 #include "clients.h"
 #include "hub.h"
 #include "monitor/monitor.h"
+#include "monitor/hmp.h"
 #include "qemu/error-report.h"
 #include "qemu/sockets.h"
 #include <libslirp.h>
@@ -43,6 +44,7 @@
 #include "system/system.h"
 #include "qemu/cutils.h"
 #include "qapi/error.h"
+#include "qapi/qapi-commands-net.h"
 #include "qobject/qdict.h"
 #include "util.h"
 #include "migration/register.h"
@@ -54,7 +56,8 @@ static int get_str_sep(char *buf, int buf_size, const char **pp, int sep)
     const char *p, *p1;
     int len;
     p = *pp;
-    p1 = strchr(p, sep);
+    /* negative sep means to search -sep from the end of buf */
+    p1 = sep >= 0 ? strchr(p, sep) : strrchr(p, -sep);
     if (!p1)
         return -1;
     len = p1 - p;
@@ -708,29 +711,30 @@ error:
     return -1;
 }
 
-static SlirpState *slirp_lookup(Monitor *mon, const char *id)
+#ifdef CONFIG_HMP
+static SlirpState *slirp_lookup(MonitorHMP *hmp, const char *id)
 {
     if (id) {
         NetClientState *nc = qemu_find_netdev(id);
         if (!nc) {
-            monitor_printf(mon, "unrecognized netdev id '%s'\n", id);
+            monitor_hmp_printf(hmp, "unrecognized netdev id '%s'\n", id);
             return NULL;
         }
         if (strcmp(nc->model, "user")) {
-            monitor_printf(mon, "invalid device specified\n");
+            monitor_hmp_printf(hmp, "invalid device specified\n");
             return NULL;
         }
         return DO_UPCAST(SlirpState, nc, nc);
     } else {
         if (QTAILQ_EMPTY(&slirp_stacks)) {
-            monitor_printf(mon, "user mode network stack not in use\n");
+            monitor_hmp_printf(hmp, "user mode network stack not in use\n");
             return NULL;
         }
         return QTAILQ_FIRST(&slirp_stacks);
     }
 }
 
-void hmp_hostfwd_remove(Monitor *mon, const QDict *qdict)
+void hmp_hostfwd_remove(MonitorHMP *hmp, const QDict *qdict)
 {
     /* TODO: support removing unix fwd */
     struct sockaddr_in host_addr = {
@@ -749,10 +753,10 @@ void hmp_hostfwd_remove(Monitor *mon, const QDict *qdict)
     const char *arg2 = qdict_get_try_str(qdict, "arg2");
 
     if (arg2) {
-        s = slirp_lookup(mon, arg1);
+        s = slirp_lookup(hmp, arg1);
         src_str = arg2;
     } else {
-        s = slirp_lookup(mon, NULL);
+        s = slirp_lookup(hmp, NULL);
         src_str = arg1;
     }
     if (!s) {
@@ -791,13 +795,14 @@ void hmp_hostfwd_remove(Monitor *mon, const QDict *qdict)
     err = slirp_remove_hostfwd(s->slirp, is_udp, host_addr.sin_addr, host_port);
 #endif
 
-    monitor_printf(mon, "host forwarding rule for %s %s\n", src_str,
-                   err ? "not found" : "removed");
+    monitor_hmp_printf(hmp, "host forwarding rule for %s %s\n", src_str,
+                       err ? "not found" : "removed");
     return;
 
  fail_syntax:
-    monitor_printf(mon, "invalid format\n");
+    monitor_hmp_printf(hmp, "invalid format\n");
 }
+#endif
 
 static int slirp_hostfwd(SlirpState *s, const char *redir_str, Error **errp)
 {
@@ -848,7 +853,7 @@ static int slirp_hostfwd(SlirpState *s, const char *redir_str, Error **errp)
 
 #if !defined(WIN32) && SLIRP_CHECK_VERSION(4, 7, 0)
     if (is_unix) {
-        if (get_str_sep(buf, sizeof(buf), &p, '-') < 0) {
+        if (get_str_sep(buf, sizeof(buf), &p, 0 - '-') < 0) {
             fail_reason = "Missing - separator";
             goto fail_syntax;
         }
@@ -954,7 +959,8 @@ static int slirp_hostfwd(SlirpState *s, const char *redir_str, Error **errp)
     return -1;
 }
 
-void hmp_hostfwd_add(Monitor *mon, const QDict *qdict)
+#ifdef CONFIG_HMP
+void hmp_hostfwd_add(MonitorHMP *hmp, const QDict *qdict)
 {
     const char *redir_str;
     SlirpState *s;
@@ -962,10 +968,10 @@ void hmp_hostfwd_add(Monitor *mon, const QDict *qdict)
     const char *arg2 = qdict_get_try_str(qdict, "arg2");
 
     if (arg2) {
-        s = slirp_lookup(mon, arg1);
+        s = slirp_lookup(hmp, arg1);
         redir_str = arg2;
     } else {
-        s = slirp_lookup(mon, NULL);
+        s = slirp_lookup(hmp, NULL);
         redir_str = arg1;
     }
     if (s) {
@@ -974,8 +980,8 @@ void hmp_hostfwd_add(Monitor *mon, const QDict *qdict)
             error_report_err(err);
         }
     }
-
 }
+#endif
 
 #if defined(CONFIG_SMBD_COMMAND)
 
@@ -1199,30 +1205,53 @@ static int slirp_guestfwd(SlirpState *s, const char *config_str, Error **errp)
     return -1;
 }
 
-void hmp_info_usernet(Monitor *mon, const QDict *qdict)
+UsernetInfoList *qmp_x_query_usernet(Error **errp)
 {
+    UsernetInfoList *head = NULL, **tail = &head;
     SlirpState *s;
 
     QTAILQ_FOREACH(s, &slirp_stacks, entry) {
+        UsernetInfo *ui = g_new0(UsernetInfo, 1);
         int id;
-        bool got_hub_id = net_hub_id_for_client(&s->nc, &id) == 0;
-        char *info = slirp_connection_info(s->slirp);
-        monitor_printf(mon, "Hub %d (%s):\n%s",
-                       got_hub_id ? id : -1,
-                       s->nc.name, info);
-        g_free(info);
+
+        if (net_hub_id_for_client(&s->nc, &id) == 0) {
+            ui->has_hub_id = true;
+            ui->hub_id = id;
+        }
+        ui->hub_name = g_strdup(s->nc.name);
+        ui->info = slirp_connection_info(s->slirp);
+
+        QAPI_LIST_APPEND(tail, ui);
     }
+
+    return head;
 }
 
+#ifdef CONFIG_HMP
+void hmp_info_usernet(MonitorHMP *hmp, const QDict *qdict)
+{
+    g_autoptr(UsernetInfoList) list = NULL;
+    UsernetInfoList *entry;
+
+    list = qmp_x_query_usernet(&error_abort);
+    for (entry = list; entry; entry = entry->next) {
+        UsernetInfo *ui = entry->value;
+        monitor_hmp_printf(hmp, "Hub %d (%s):\n%s",
+                           ui->has_hub_id ? (int)ui->hub_id : -1,
+                           ui->hub_name, ui->info);
+    }
+}
+#endif
+
 static void
-net_init_slirp_configs(const StringList *fwd, int flags)
+net_init_slirp_configs_host(const NetdevUserHostForwardList *fwd)
 {
     while (fwd) {
         struct slirp_config_str *config;
 
         config = g_malloc0(sizeof(*config));
         pstrcpy(config->str, sizeof(config->str), fwd->value->str);
-        config->flags = flags;
+        config->flags = SLIRP_CFG_HOSTFWD;
         config->next = slirp_configs;
         slirp_configs = config;
 
@@ -1230,9 +1259,24 @@ net_init_slirp_configs(const StringList *fwd, int flags)
     }
 }
 
-static const char **slirp_dnssearch(const StringList *dnsname)
+static void
+net_init_slirp_configs_guest(const NetdevUserGuestForwardList *fwd)
 {
-    const StringList *c = dnsname;
+    while (fwd) {
+        struct slirp_config_str *config;
+
+        config = g_malloc0(sizeof(*config));
+        pstrcpy(config->str, sizeof(config->str), fwd->value->str);
+        config->next = slirp_configs;
+        slirp_configs = config;
+
+        fwd = fwd->next;
+    }
+}
+
+static const char **slirp_dnssearch(const NetdevUserDomainSuffixList *dnsname)
+{
+    const NetdevUserDomainSuffixList *c = dnsname;
     size_t i = 0, num_opts = 0;
     const char **ret;
 
@@ -1285,8 +1329,8 @@ int net_init_slirp(const Netdev *netdev, const char *name,
 
     /* all optional fields are initialized to "all bits zero" */
 
-    net_init_slirp_configs(user->hostfwd, SLIRP_CFG_HOSTFWD);
-    net_init_slirp_configs(user->guestfwd, 0);
+    net_init_slirp_configs_host(user->hostfwd);
+    net_init_slirp_configs_guest(user->guestfwd);
 
     ret = net_slirp_init(peer, "user", name, user->q_restrict,
                          ipv4, vnet, user->host,

@@ -27,7 +27,6 @@ system_ss.add(when: 'CONFIG_ALLWINNER_EMAC', if_true: files('allwinner_emac.c'))
 system_ss.add(when: 'CONFIG_ALLWINNER_SUN8I_EMAC', if_true: files('allwinner-sun8i-emac.c'))
 system_ss.add(when: 'CONFIG_IMX_FEC', if_true: files('imx_fec.c'))
 system_ss.add(when: 'CONFIG_MSF2', if_true: files('msf2-emac.c'))
-system_ss.add(when: 'CONFIG_MARVELL_88W8618', if_true: files('mv88w8618_eth.c'))
 
 system_ss.add(when: 'CONFIG_CADENCE', if_true: files('cadence_gem.c'))
 system_ss.add(when: 'CONFIG_STELLARIS_ENET', if_true: files('stellaris_enet.c'))
@@ -48,10 +47,9 @@ system_ss.add(when: 'CONFIG_VIRTIO_NET', if_true: files('net_rx_pkt.c'))
 system_ss.add(when: 'CONFIG_VIRTIO_NET', if_true: files('virtio-net.c'))
 
 if have_vhost_net
-  system_ss.add(when: 'CONFIG_VIRTIO_NET', if_true: files('vhost_net.c'), if_false: files('vhost_net-stub.c'))
-else
-  system_ss.add(files('vhost_net-stub.c'))
+  system_ss.add(when: 'CONFIG_VIRTIO_NET', if_true: files('vhost_net.c'))
 endif
+stub_ss.add(files('vhost_net-stub.c'))
 
 system_ss.add(when: 'CONFIG_ETSEC', if_true: files(
   'fsl_etsec/etsec.c',
@@ -68,6 +66,8 @@ system_ss.add(when: 'CONFIG_ROCKER', if_true: files(
   'rocker/rocker_world.c',
 ))
 stub_ss.add(files('rocker/rocker-stubs.c'))
-system_ss.add(files('rocker/rocker-hmp-cmds.c'))
+if have_hmp
+  system_ss.add(files('rocker/rocker-hmp-cmds.c'))
+endif
 
 subdir('can')

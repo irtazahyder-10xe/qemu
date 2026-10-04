@@ -48,6 +48,18 @@ static bool aprofile_require_alignment(CPUARMState *env, int el, uint64_t sctlr)
     }
 
     /*
+     * Pre-v6 had a completely different model for unaligned accesses,
+     * which doesn't include taking unaligned faults for Device memory.
+     * v6 has the new model only when SCTLR.U is set. Later architecture
+     * versions repurpose the SCTLR bit for something else, so we mustn't
+     * test it except for actual v6 CPUs.
+     */
+    if (!arm_feature(env, ARM_FEATURE_V6) ||
+        (!arm_feature(env, ARM_FEATURE_V7) && !(sctlr & SCTLR_U))) {
+        return false;
+    }
+
+    /*
      * With VMSA, if translation is disabled, then the default memory type
      * is Device(-nGnRnE) instead of Normal, which requires that alignment
      * be enforced.  Since this affects all ram, it is most efficient
@@ -75,9 +87,10 @@ bool access_secure_reg(CPUARMState *env)
 }
 
 static CPUARMTBFlags rebuild_hflags_common(CPUARMState *env, int fp_el,
-                                           ARMMMUIdx mmu_idx,
-                                           CPUARMTBFlags flags)
+                                           ARMMMUIdx mmu_idx)
 {
+    CPUARMTBFlags flags = {};
+
     DP_TBFLAG_ANY(flags, FPEXC_EL, fp_el);
     DP_TBFLAG_ANY(flags, MMUIDX, arm_to_core_mmu_idx(mmu_idx));
 
@@ -88,28 +101,48 @@ static CPUARMTBFlags rebuild_hflags_common(CPUARMState *env, int fp_el,
     return flags;
 }
 
-static CPUARMTBFlags rebuild_hflags_common_32(CPUARMState *env, int fp_el,
-                                              ARMMMUIdx mmu_idx,
-                                              CPUARMTBFlags flags)
+static void rebuild_hflags_common_32(CPUARMTBFlags *flags, CPUARMState *env)
 {
     bool sctlr_b = arm_sctlr_b(env);
 
     if (sctlr_b) {
-        DP_TBFLAG_A32(flags, SCTLR__B, 1);
+        DP_TBFLAG_A32(*flags, SCTLR__B, 1);
     }
     if (arm_cpu_data_is_big_endian_a32(env, sctlr_b)) {
-        DP_TBFLAG_ANY(flags, BE_DATA, 1);
+        DP_TBFLAG_ANY(*flags, BE_DATA, 1);
     }
-    DP_TBFLAG_A32(flags, NS, !access_secure_reg(env));
+    DP_TBFLAG_A32(*flags, NS, !access_secure_reg(env));
+}
 
-    return rebuild_hflags_common(env, fp_el, mmu_idx, flags);
+static void rebuild_hflags_common_aprofile(CPUARMTBFlags *flags,
+                                           CPUARMState *env, int el,
+                                           uint64_t sctlr, bool il)
+{
+    if (il) {
+        DP_TBFLAG_ANY(*flags, PSTATE__IL, 1);
+    }
+    if (env->pstate & PSTATE_UINJ) {
+        DP_TBFLAG_ANY(*flags, PSTATE__UINJ, 1);
+    }
+    if (aprofile_require_alignment(env, el, sctlr)) {
+        DP_TBFLAG_ANY(*flags, ALIGN_MEM, 1);
+    }
+    if (arm_fgt_active(env, el)) {
+        DP_TBFLAG_ANY(*flags, FGT_ACTIVE, 1);
+        if (fgt_svc(env, el)) {
+            DP_TBFLAG_ANY(*flags, FGT_SVC, 1);
+        }
+    }
 }
 
 static CPUARMTBFlags rebuild_hflags_m32(CPUARMState *env, int fp_el,
                                         ARMMMUIdx mmu_idx)
 {
-    CPUARMTBFlags flags = {};
-    uint32_t ccr = env->v7m.ccr[env->v7m.secure];
+    CPUARMTBFlags flags = rebuild_hflags_common(env, fp_el, mmu_idx);
+    uint32_t ccr;
+
+    rebuild_hflags_common_32(&flags, env);
+    ccr = env->v7m.ccr[env->v7m.secure];
 
     /* Without HaveMainExt, CCR.UNALIGN_TRP is RES1. */
     if (ccr & R_V7M_CCR_UNALIGN_TRP_MASK) {
@@ -134,8 +167,7 @@ static CPUARMTBFlags rebuild_hflags_m32(CPUARMState *env, int fp_el,
     if (arm_feature(env, ARM_FEATURE_M_SECURITY) && env->v7m.secure) {
         DP_TBFLAG_M32(flags, SECURE, 1);
     }
-
-    return rebuild_hflags_common_32(env, fp_el, mmu_idx, flags);
+    return flags;
 }
 
 /* This corresponds to the ARM pseudocode function IsFullA64Enabled(). */
@@ -164,16 +196,117 @@ static bool sme_fa64(CPUARMState *env, int el)
     return true;
 }
 
+static int neon_exception_el(CPUARMState *env, int cur_el)
+{
+    /*
+     * Return the EL to trap to for A32 Neon specific traps
+     * (CPACR.ASEDIS and HCPTR.TASE). In the pseudocode these are
+     * checked in the same function as the more general trap bits that
+     * we handle in fp_exception_el(). Fortunately it is always the
+     * case that if the trap/enable bits specify taking an exception
+     * to different ELs for the Neon-specific insns and the general fp
+     * insns then the trap to the lower of the two ELs has priority,
+     * so we can calculate the two target ELs separately and pick the
+     * right destination later.  Compare AArch32_CheckAdvSIMDOrFPEnabled().
+     *
+     * CPACR doesn't exist before v6, but neither does Neon, so we can
+     * assume that if we're here testing this then the register exists.
+     * HCPTR always exists if EL2 is present.
+     */
+    uint64_t hcr_el2 = arm_hcr_el2_eff(env);
+    bool cpacr_asedis = FIELD_EX64(env->cp15.cpacr_el1, CPACR, ASEDIS);
+    bool hcptr_tase = FIELD_EX64(env->cp15.cptr_el[2], HCPTR, TASE);
+    bool have_aarch32_el3 =
+        arm_feature(env, ARM_FEATURE_EL3) && !arm_el_is_aa64(env, 3);
+
+    if (!arm_feature(env, ARM_FEATURE_NEON_TRAPS)) {
+        /* This CPU doesn't implement the trap bits (Cortex-A8) */
+        return 0;
+    }
+
+    if (arm_feature(env, ARM_FEATURE_EL2) && arm_el_is_aa64(env, 2)) {
+        /*
+         * The AArch64 CPTR_EL2 has no equivalent to HCPTR.TASE; only
+         * an AArch32 EL2 can trap Neon specifically.
+         */
+        hcptr_tase = false;
+    }
+
+    /*
+     * We know we're in AArch32, but if this is EL0 and EL1 is AArch64
+     * then CPACR_EL1 applies rather than CPACR, and it doesn't have
+     * ASEDIS (instead using the same bit for TCPAC).
+     */
+    if (cur_el == 0 && arm_el_is_aa64(env, 1)) {
+        cpacr_asedis = false;
+    }
+
+    /* CPACR is ignored if E2H+TGE are both set */
+    if ((hcr_el2 & (HCR_E2H | HCR_TGE)) == (HCR_E2H | HCR_TGE)) {
+        cpacr_asedis = false;
+    }
+
+    /*
+     * NSACR.NSASEDIS makes the effective values of HCPTR.TASE and
+     * CPACR.ASEDIS be 1 in NonSecure state. NSACR has no
+     * effect unless EL3 exists and is AArch32.
+     */
+    if (have_aarch32_el3 && cur_el <= 2 && !arm_is_secure_below_el3(env)) {
+        if (FIELD_EX32(env->cp15.nsacr, NSACR, NSASEDIS)) {
+            cpacr_asedis = true;
+            hcptr_tase = true;
+        }
+    }
+
+    if (cpacr_asedis) {
+        if (have_aarch32_el3 && (cur_el == 3 || arm_is_secure_below_el3(env))) {
+            /* Trap from Secure PL0 or PL1 to Secure PL1 */
+            return 3;
+        }
+        if (cur_el <= 1) {
+            /* trap from EL0 or EL1 to EL1 */
+            return 1;
+        }
+    }
+
+    /* HCPTR.TASE traps to EL2, including for execution at EL2 */
+    if (hcptr_tase && cur_el <= 2) {
+        return 2;
+    }
+    return 0;
+}
+
+static bool arm_d32dis(CPUARMState *env, int cur_el)
+{
+    bool cpacr_d32dis = FIELD_EX64(env->cp15.cpacr_el1, CPACR, D32DIS);
+
+    if (!arm_feature(env, ARM_FEATURE_D32DIS)) {
+        return false;
+    }
+
+    /* If NSACR.NSD32DIS is set, CPACR.D32DIS acts as 1 in NonSecure */
+    if ((arm_feature(env, ARM_FEATURE_EL3) && !arm_el_is_aa64(env, 3) &&
+         cur_el <= 2 && !arm_is_secure_below_el3(env))) {
+        if (FIELD_EX32(env->cp15.nsacr, NSACR, NSD32DIS)) {
+            cpacr_d32dis = true;
+        }
+    }
+    return cpacr_d32dis;
+}
+
 static CPUARMTBFlags rebuild_hflags_a32(CPUARMState *env, int fp_el,
                                         ARMMMUIdx mmu_idx)
 {
-    CPUARMTBFlags flags = {};
-    int el = arm_current_el(env);
-    uint64_t sctlr = arm_sctlr(env, el);
+    CPUARMTBFlags flags = rebuild_hflags_common(env, fp_el, mmu_idx);
+    int el;
+    uint64_t sctlr;
 
-    if (aprofile_require_alignment(env, el, sctlr)) {
-        DP_TBFLAG_ANY(flags, ALIGN_MEM, 1);
-    }
+    rebuild_hflags_common_32(&flags, env);
+
+    el = arm_current_el(env);
+    sctlr = arm_sctlr(env, el);
+    rebuild_hflags_common_aprofile(&flags, env, el, sctlr,
+                                   env->uncached_cpsr & CPSR_IL);
 
     if (arm_el_is_aa64(env, 1)) {
         DP_TBFLAG_A32(flags, VFPEN, 1);
@@ -182,17 +315,6 @@ static CPUARMTBFlags rebuild_hflags_a32(CPUARMState *env, int fp_el,
     if (el < 2 && env->cp15.hstr_el2 && arm_is_el2_enabled(env) &&
         (arm_hcr_el2_eff(env) & (HCR_E2H | HCR_TGE)) != (HCR_E2H | HCR_TGE)) {
         DP_TBFLAG_A32(flags, HSTR_ACTIVE, 1);
-    }
-
-    if (arm_fgt_active(env, el)) {
-        DP_TBFLAG_ANY(flags, FGT_ACTIVE, 1);
-        if (fgt_svc(env, el)) {
-            DP_TBFLAG_ANY(flags, FGT_SVC, 1);
-        }
-    }
-
-    if (env->uncached_cpsr & CPSR_IL) {
-        DP_TBFLAG_ANY(flags, PSTATE__IL, 1);
     }
 
     /*
@@ -209,7 +331,11 @@ static CPUARMTBFlags rebuild_hflags_a32(CPUARMState *env, int fp_el,
         DP_TBFLAG_A32(flags, SME_TRAP_NONSTREAMING, 1);
     }
 
-    return rebuild_hflags_common_32(env, fp_el, mmu_idx, flags);
+    DP_TBFLAG_A32(flags, NEONEXC_EL, neon_exception_el(env, el));
+
+    DP_TBFLAG_A32(flags, D32DIS, arm_d32dis(env, el));
+
+    return flags;
 }
 
 /*
@@ -237,26 +363,75 @@ static int zt0_exception_el(CPUARMState *env, int el)
     return 0;
 }
 
+/*
+ * Return the exception level to which exceptions should be taken for FPMR.
+ * Compare the EnFPM bits in the "Accessing FPMR" pseudocode.  Note that
+ * the floating-point enabled check will be handled separately.
+ */
+static int fpmr_exception_el(CPUARMState *env, int el)
+{
+    switch (el) {
+    case 0:
+        if (el_is_in_host(env, 0)) {
+            if (!(env->cp15.sctlr_el[2] & SCTLR_EnFPM)) {
+                return 2;
+            }
+            break;
+        }
+        if (!(env->cp15.sctlr_el[1] & SCTLR_EnFPM)) {
+            return 1;
+        }
+        /* fall through */
+    case 1:
+        if (!(arm_hcrx_el2_eff(env) & HCRX_ENFPM)) {
+            return 2;
+        }
+        break;
+    case 2:
+        break;
+    case 3:
+        return 0;
+    default:
+        g_assert_not_reached();
+    }
+    if (arm_feature(env, ARM_FEATURE_EL3)
+        && !(env->cp15.scr_el3 & SCR_ENFPM)) {
+        return 3;
+    }
+    return 0;
+}
+
 static CPUARMTBFlags rebuild_hflags_a64(CPUARMState *env, int el, int fp_el,
                                         ARMMMUIdx mmu_idx)
 {
-    CPUARMTBFlags flags = {};
+    CPUARMTBFlags flags = rebuild_hflags_common(env, fp_el, mmu_idx);
     ARMMMUIdx stage1 = stage_1_mmu_idx(mmu_idx);
-    uint64_t tcr = regime_tcr(env, mmu_idx);
-    uint64_t hcr = arm_hcr_el2_eff(env);
-    uint64_t sctlr;
-    int tbii, tbid;
+    uint64_t sctlr = regime_sctlr(env, stage1);
+    uint64_t tcr, hcr;
+    int tbii, tbid, mtx;
+
+    rebuild_hflags_common_aprofile(&flags, env, el, sctlr,
+                                   env->pstate & PSTATE_IL);
 
     DP_TBFLAG_ANY(flags, AARCH64_STATE, 1);
 
+    if (arm_cpu_data_is_big_endian_a64(el, sctlr)) {
+        DP_TBFLAG_ANY(flags, BE_DATA, 1);
+    }
+
     /* Get control bits for tagged addresses.  */
+    tcr = regime_tcr(env, mmu_idx);
     tbid = aa64_va_parameter_tbi(tcr, mmu_idx);
     tbii = tbid & ~aa64_va_parameter_tbid(tcr, mmu_idx);
+    mtx = cpu_isar_feature(aa64_mte_mtx, env_archcpu(env)) ?
+          aa64_va_parameter_mtx(tcr, mmu_idx) :
+          0;
 
     DP_TBFLAG_A64(flags, TBII, tbii);
     DP_TBFLAG_A64(flags, TBID, tbid);
 
     /* E2H is used by both VHE and NV2. */
+    hcr = arm_hcr_el2_eff(env);
     if (hcr & HCR_E2H) {
         DP_TBFLAG_A64(flags, E2H, 1);
     }
@@ -305,16 +480,6 @@ static CPUARMTBFlags rebuild_hflags_a64(CPUARMState *env, int el, int fp_el,
                 DP_TBFLAG_A64(flags, ZT0EXC_EL, zt0_el);
             }
         }
-    }
-
-    sctlr = regime_sctlr(env, stage1);
-
-    if (aprofile_require_alignment(env, el, sctlr)) {
-        DP_TBFLAG_ANY(flags, ALIGN_MEM, 1);
-    }
-
-    if (arm_cpu_data_is_big_endian_a64(el, sctlr)) {
-        DP_TBFLAG_ANY(flags, BE_DATA, 1);
     }
 
     if (cpu_isar_feature(aa64_pauth, env_archcpu(env))) {
@@ -367,18 +532,9 @@ static CPUARMTBFlags rebuild_hflags_a64(CPUARMState *env, int el, int fp_el,
         }
     }
 
-    if (env->pstate & PSTATE_IL) {
-        DP_TBFLAG_ANY(flags, PSTATE__IL, 1);
-    }
-
-    if (arm_fgt_active(env, el)) {
-        DP_TBFLAG_ANY(flags, FGT_ACTIVE, 1);
-        if (FIELD_EX64(env->cp15.fgt_exec[FGTREG_HFGITR], HFGITR_EL2, ERET)) {
-            DP_TBFLAG_A64(flags, TRAP_ERET, 1);
-        }
-        if (fgt_svc(env, el)) {
-            DP_TBFLAG_ANY(flags, FGT_SVC, 1);
-        }
+    if (EX_TBFLAG_ANY(flags, FGT_ACTIVE) &&
+        FIELD_EX64(env->cp15.fgt_exec[FGTREG_HFGITR], HFGITR_EL2, ERET)) {
+        DP_TBFLAG_A64(flags, TRAP_ERET, 1);
     }
 
     /*
@@ -403,14 +559,14 @@ static CPUARMTBFlags rebuild_hflags_a64(CPUARMState *env, int el, int fp_el,
         /*
          * Set MTE_ACTIVE if any access may be Checked, and leave clear
          * if all accesses must be Unchecked:
-         * 1) If no TBI, then there are no tags in the address to check,
+         * 1) If TBI and MTX are both unset, accesses are Unchecked.
          * 2) If Tag Check Override, then all accesses are Unchecked,
          * 3) If Tag Check Fail == 0, then Checked access have no effect,
          * 4) If no Allocation Tag Access, then all accesses are Unchecked.
          */
         if (allocation_tag_access_enabled(env, el, sctlr)) {
             DP_TBFLAG_A64(flags, ATA, 1);
-            if (tbid
+            if ((tbid || mtx)
                 && !(env->pstate & PSTATE_TCO)
                 && (sctlr & (el == 0 ? SCTLR_TCF0 : SCTLR_TCF))) {
                 DP_TBFLAG_A64(flags, MTE_ACTIVE, 1);
@@ -423,15 +579,27 @@ static CPUARMTBFlags rebuild_hflags_a64(CPUARMState *env, int el, int fp_el,
                      */
                     DP_TBFLAG_A64(flags, MTE0_ACTIVE, 1);
                 }
+                /*
+                 * Repeat for MTE_STORE_ONLY
+                 */
+                if ((el == 0 ? SCTLR_TCSO0 : SCTLR_TCSO) & sctlr) {
+                    DP_TBFLAG_A64(flags, MTE_STORE_ONLY, 1);
+                    if (!EX_TBFLAG_A64(flags, UNPRIV)) {
+                        DP_TBFLAG_A64(flags, MTE0_STORE_ONLY, 1);
+                    }
+                }
             }
         }
         /* And again for unprivileged accesses, if required.  */
         if (EX_TBFLAG_A64(flags, UNPRIV)
-            && tbid
+            && (tbid || mtx)
             && !(env->pstate & PSTATE_TCO)
             && (sctlr & SCTLR_TCF0)
             && allocation_tag_access_enabled(env, 0, sctlr)) {
             DP_TBFLAG_A64(flags, MTE0_ACTIVE, 1);
+            if (SCTLR_TCSO0 & sctlr) {
+                DP_TBFLAG_A64(flags, MTE0_STORE_ONLY, 1);
+            }
         }
         /*
          * For unpriv tag-setting accesses we also need ATA0. Again, in
@@ -447,6 +615,8 @@ static CPUARMTBFlags rebuild_hflags_a64(CPUARMState *env, int el, int fp_el,
         }
         /* Cache TCMA as well as TBI. */
         DP_TBFLAG_A64(flags, TCMA, aa64_va_parameter_tcma(tcr, mmu_idx));
+        /* Cache MTX. */
+        DP_TBFLAG_A64(flags, MTX, mtx);
     }
 
     if (cpu_isar_feature(aa64_gcs, env_archcpu(env))) {
@@ -500,7 +670,10 @@ static CPUARMTBFlags rebuild_hflags_a64(CPUARMState *env, int el, int fp_el,
         }
     }
 
-    return rebuild_hflags_common(env, fp_el, mmu_idx, flags);
+    if (cpu_isar_feature(aa64_fpmr, env_archcpu(env))) {
+        DP_TBFLAG_A64(flags, FPMR_EL, fpmr_exception_el(env, el));
+    }
+    return flags;
 }
 
 static CPUARMTBFlags rebuild_hflags_internal(CPUARMState *env)

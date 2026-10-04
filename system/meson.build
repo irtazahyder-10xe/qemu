@@ -8,25 +8,32 @@ system_ss.add(files(
   'bootdevice.c',
   'cpus.c',
   'cpu-timers.c',
-  'datadir.c',
   'dirtylimit.c',
   'dma-helpers.c',
   'exit-with-parent.c',
   'globals.c',
   'ioport.c',
   'ram-block-attributes.c',
+  'ram-discard-manager.c',
   'memory_mapping.c',
   'memory.c',
   'physmem.c',
+  'physmem-qmp-cmds.c',
   'qdev-monitor.c',
   'qtest.c',
   'rtc.c',
   'runstate-action.c',
-  'runstate-hmp-cmds.c',
   'runstate.c',
-  'tpm-hmp-cmds.c',
   'watchpoint.c',
 ))
+
+if have_hmp
+  system_ss.add(files(
+    'dirtylimit-hmp-cmds.c',
+    'runstate-hmp-cmds.c',
+    'tpm-hmp-cmds.c',
+  ))
+endif
 
 if have_tpm
   system_ss.add(files('tpm.c'))
