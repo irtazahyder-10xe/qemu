@@ -27,6 +27,7 @@
 #include "qemu/units.h"
 #include "hw/pci/pci.h"
 #include "hw/pci/msi.h"
+#include "hw/pci/pcie.h"
 #include "qemu/timer.h"
 #include "qemu/thread.h"
 #include "qom/object.h"
@@ -90,15 +91,25 @@ static void edu_msi_trans(PCIDevice *dev, unsigned int vector)
     }
     msg = msi_get_message(&edu->pdev, 0);
 
+    /*
+     * Only convey a PASID/process ID when the guest has enabled the PCIe
+     * PASID capability (PASID Control.Enable).  Otherwise the request is
+     * sent without a process ID, as PCIe forbids issuing PASID traffic
+     * before PASID is enabled.
+     */
+    bool pasid_enabled = pcie_pasid_enabled(&edu->pdev);
+    bool proc_valid = pasid_enabled &&
+                      !!(edu->process_info_msi & EDU_PROC_VALID);
+    bool priv = proc_valid &&
+                !!(edu->process_info_msi & EDU_PROC_PRIV);
+    uint32_t proc_id = proc_valid ?
+        (edu->process_info_msi >> EDU_PROC_PASID_OFFSET) & EDU_PROC_PASID_MASK : 0;
+
     edu_ghash_entry_s *value = calloc(1, sizeof(edu_ghash_entry_s));
-    bool priv = (edu->process_info_msi & EDU_PROC_VALID) ?
-                !!(edu->process_info_msi & EDU_PROC_PRIV) : 0;
 
     memcpy(&value->msi, &msg, sizeof(MSIMessage));
     value->is_msi = true;
-    id = rtl_trans_reqt(msg.address, true, priv, dev_id,
-                        !!(edu->process_info_msi & EDU_PROC_VALID),
-                        (edu->process_info_msi >> EDU_PROC_PASID_OFFSET) & EDU_PROC_PASID_MASK);
+    id = rtl_trans_reqt(msg.address, true, priv, dev_id, proc_valid, proc_id);
     g_hash_table_insert(edu->edu_state_history, GINT_TO_POINTER(id), value);
     trace_edu_msi(id, msg.address, msg.data);
 }
@@ -278,18 +289,27 @@ static void edu_dma_timer(void *opaque)
         return;
     }
 
-    /* Send DMA request to RTL */
-    bool priv = (edu->process_info_dma & EDU_PROC_VALID) ?
-                !!(edu->process_info_dma & EDU_PROC_PRIV) : 0;
+    /*
+     * Only convey a PASID/process ID when the guest has enabled the PCIe
+     * PASID capability (PASID Control.Enable).  Otherwise the request is
+     * sent without a process ID, as PCIe forbids issuing PASID traffic
+     * before PASID is enabled.
+     */
+    bool pasid_enabled = pcie_pasid_enabled(&edu->pdev);
+    bool proc_valid = pasid_enabled &&
+                      !!(edu->process_info_dma & EDU_PROC_VALID);
+    bool priv = proc_valid &&
+                !!(edu->process_info_dma & EDU_PROC_PRIV);
+    uint32_t proc_id = proc_valid ?
+        (edu->process_info_dma >> EDU_PROC_PASID_OFFSET) & EDU_PROC_PASID_MASK : 0;
 
+    /* Send DMA request to RTL */
     edu_ghash_entry_s *value = calloc(1, sizeof(edu_ghash_entry_s));
     memcpy(&value->dma, &edu->dma, sizeof(dma_state));
     value->is_msi = false;
     id = rtl_trans_reqt(edu_clamp_addr(edu, dma_to_pci ? edu->dma.dst : edu->dma.src),
                         EDU_DMA_DIR(edu->dma.cmd) == EDU_DMA_TO_PCI,
-                        priv, dev_id,
-                        !!(edu->process_info_dma & EDU_PROC_VALID),
-                        (edu->process_info_dma >> EDU_PROC_PASID_OFFSET) & EDU_PROC_PASID_MASK);
+                        priv, dev_id, proc_valid, proc_id);
     g_hash_table_insert(edu->edu_state_history, GINT_TO_POINTER(id), value);
     trace_edu_dma(id, edu_clamp_addr(edu, dma_to_pci ? edu->dma.dst : edu->dma.src),
                   EDU_DMA_DIR(edu->dma.cmd) == EDU_DMA_TO_PCI ? "WRITE" : "READ");
@@ -521,6 +541,22 @@ static void pci_edu_realize(PCIDevice *pdev, Error **errp)
         return;
     }
 
+    /*
+     * PCIe endpoint capability.  EDU is exposed as a PCIe device (see
+     * edu_instance_init()) so that it can host PCIe extended capabilities,
+     * in particular PASID below.
+     */
+    assert(pcie_endpoint_cap_init(pdev, 0xa0) > 0);
+
+    /*
+     * PASID extended capability: advertise a 20-bit PASID (matching the
+     * process_info_dma/process_info_msi PASID field) with execute and
+     * privileged modes supported.  PASID stays disabled until the guest
+     * sets PASID Control.Enable; edu_dma_timer() honours that bit.
+     */
+    pcie_pasid_init(pdev, PCI_CONFIG_SPACE_SIZE, EDU_PROC_PASID_BITS,
+                    true, true);
+
     timer_init_ms(&edu->dma_timer, QEMU_CLOCK_VIRTUAL, edu_dma_timer, edu);
 
     qemu_mutex_init(&edu->thr_mutex);
@@ -550,6 +586,7 @@ static void pci_edu_uninit(PCIDevice *pdev)
 
     timer_del(&edu->dma_timer);
     msi_uninit(pdev);
+    pcie_cap_exit(pdev);
 }
 
 static void edu_instance_finalize(Object *obj)
@@ -563,6 +600,13 @@ static void edu_instance_finalize(Object *obj)
 static void edu_instance_init(Object *obj)
 {
     EduState *edu = EDU(obj);
+
+    /*
+     * Expose the device as a PCIe endpoint so it can carry PCIe extended
+     * capabilities (e.g. PASID).  This must be set before realize(), where
+     * the PCI config space size is derived from pci_is_express().
+     */
+    PCI_DEVICE(obj)->cap_present |= QEMU_PCI_CAP_EXPRESS;
 
     edu->dma_mask = (1UL << 28) - 1;
     object_property_add_uint64_ptr(obj, "dma_mask",
