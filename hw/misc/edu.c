@@ -542,11 +542,11 @@ static void pci_edu_realize(PCIDevice *pdev, Error **errp)
     }
 
     /*
-     * PCIe endpoint capability.  EDU is exposed as a PCIe device (see
-     * edu_instance_init()) so that it can host PCIe extended capabilities,
+     * PCIe endpoint capability.  The device is registered as a PCIe endpoint
+     * (INTERFACE_PCIE_DEVICE) so that it can host PCIe extended capabilities,
      * in particular PASID below.
      */
-    assert(pcie_endpoint_cap_init(pdev, 0xa0) > 0);
+    assert(pcie_endpoint_cap_init(pdev, 0) > 0);
 
     /*
      * PASID extended capability: advertise a 20-bit PASID (matching the
@@ -601,13 +601,6 @@ static void edu_instance_init(Object *obj)
 {
     EduState *edu = EDU(obj);
 
-    /*
-     * Expose the device as a PCIe endpoint so it can carry PCIe extended
-     * capabilities (e.g. PASID).  This must be set before realize(), where
-     * the PCI config space size is derived from pci_is_express().
-     */
-    PCI_DEVICE(obj)->cap_present |= QEMU_PCI_CAP_EXPRESS;
-
     edu->dma_mask = (1UL << 28) - 1;
     object_property_add_uint64_ptr(obj, "dma_mask",
                                    &edu->dma_mask, OBJ_PROP_FLAG_READWRITE);
@@ -636,7 +629,7 @@ static const TypeInfo edu_types[] = {
         .instance_finalize = edu_instance_finalize,
         .class_init    = edu_class_init,
         .interfaces    = (const InterfaceInfo[]) {
-            { INTERFACE_CONVENTIONAL_PCI_DEVICE },
+            { INTERFACE_PCIE_DEVICE },
             { },
         },
     }
