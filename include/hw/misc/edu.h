@@ -68,7 +68,7 @@ struct EduState {
 #define EDU_PROC_RSRV_OFFSET    3
 #define EDU_PROC_PASID_BITS     20
 #define EDU_PROC_PASID_MASK     ((1UL << 20) - 1)
-#define EDU_PROC_PASID_OFFSET   2
+#define EDU_PROC_PASID_OFFSET   12
     /* | Proc ID | RSRV | E | P | V | */
     /* 31        12     3   2   1   0 */
     uint32_t process_info_dma;

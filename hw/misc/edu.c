@@ -546,6 +546,9 @@ static void pci_edu_realize(PCIDevice *pdev, Error **errp)
      * (INTERFACE_PCIE_DEVICE) so that it can host PCIe extended capabilities,
      * in particular PASID below.
      */
+    memory_region_init_io(&edu->mmio, OBJECT(edu), &edu_mmio_ops, edu,
+                          "edu-mmio", 1 * MiB);
+    pci_register_bar(pdev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY, &edu->mmio);
     assert(pcie_endpoint_cap_init(pdev, 0) > 0);
 
     /*
@@ -563,12 +566,8 @@ static void pci_edu_realize(PCIDevice *pdev, Error **errp)
     qemu_cond_init(&edu->thr_cond);
     qemu_thread_create(&edu->thread, "edu_fact", edu_fact_thread,
                        edu, QEMU_THREAD_JOINABLE);
-    /* Initializing lti frontend */
-    memory_region_init_io(&edu->mmio, OBJECT(edu), &edu_mmio_ops, edu,
-                          "edu-mmio", 1 * MiB);
-    pci_register_bar(pdev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY, &edu->mmio);
+
     edu->edu_state_history = g_hash_table_new_full(NULL, NULL, NULL, free);
-    edu->registered = false;
 }
 
 static void pci_edu_uninit(PCIDevice *pdev)
@@ -602,6 +601,7 @@ static void edu_instance_init(Object *obj)
     EduState *edu = EDU(obj);
 
     edu->dma_mask = (1UL << 28) - 1;
+    edu->registered = false;
     object_property_add_uint64_ptr(obj, "dma_mask",
                                    &edu->dma_mask, OBJ_PROP_FLAG_READWRITE);
 }
