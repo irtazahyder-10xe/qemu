@@ -61,16 +61,16 @@ struct EduState {
 
 #define EDU_PROC_DMA_OFFSET     0x100
 #define EDU_PROC_MSI_OFFSET     0x104
-#define EDU_PROC_VALID          1
-#define EDU_PROC_PRIV           2
-#define EDU_PROC_EXEC           4
-#define EDU_PROC_RSRV_MASK      ((1UL << 9) - 1)
-#define EDU_PROC_RSRV_OFFSET    3
+#define EDU_PROC_VALID          (1UL << 20)
+#define EDU_PROC_EXEC           (1UL << 21)
+#define EDU_PROC_PRIV           (1UL << 22)
 #define EDU_PROC_PASID_BITS     20
-#define EDU_PROC_PASID_MASK     ((1UL << 20) - 1)
-#define EDU_PROC_PASID_OFFSET   12
-    /* | Proc ID | RSRV | E | P | V | */
-    /* 31        12     3   2   1   0 */
+#define EDU_PROC_PASID_MASK     ((1UL << EDU_PROC_PASID_BITS) - 1)
+#define EDU_PROC_RSVD_OFFSET    23
+#define EDU_PROC_RSVD_MASK      ((1UL << 9) - 1)
+    /* | RSVD | P | E | V | Process ID | */
+    /* 31    23  22  21  20  19         0 */
+
     uint32_t process_info_dma;
     uint32_t process_info_msi;
     // Whether device has been registered by RTL IOMMU

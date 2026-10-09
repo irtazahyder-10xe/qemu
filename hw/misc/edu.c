@@ -103,7 +103,7 @@ static void edu_msi_trans(PCIDevice *dev, unsigned int vector)
     bool priv = proc_valid &&
                 !!(edu->process_info_msi & EDU_PROC_PRIV);
     uint32_t proc_id = proc_valid ?
-        (edu->process_info_msi >> EDU_PROC_PASID_OFFSET) & EDU_PROC_PASID_MASK : 0;
+        (edu->process_info_msi & EDU_PROC_PASID_MASK) : 0;
 
     edu_ghash_entry_s *value = calloc(1, sizeof(edu_ghash_entry_s));
 
@@ -301,7 +301,7 @@ static void edu_dma_timer(void *opaque)
     bool priv = proc_valid &&
                 !!(edu->process_info_dma & EDU_PROC_PRIV);
     uint32_t proc_id = proc_valid ?
-        (edu->process_info_dma >> EDU_PROC_PASID_OFFSET) & EDU_PROC_PASID_MASK : 0;
+        (edu->process_info_dma & EDU_PROC_PASID_MASK): 0;
 
     /* Send DMA request to RTL */
     edu_ghash_entry_s *value = calloc(1, sizeof(edu_ghash_entry_s));
@@ -455,10 +455,10 @@ static void edu_mmio_write(void *opaque, hwaddr addr, uint64_t val,
         dma_rw(edu, true, &val, &edu->dma.cmd, true);
         break;
     case EDU_PROC_DMA_OFFSET:
-        edu->process_info_dma = val & ~(EDU_PROC_RSRV_MASK << EDU_PROC_RSRV_OFFSET);
+        edu->process_info_dma = val & ~(EDU_PROC_RSVD_MASK << EDU_PROC_RSVD_OFFSET);
         break;
     case EDU_PROC_MSI_OFFSET:
-        edu->process_info_msi = val & ~(EDU_PROC_RSRV_MASK << EDU_PROC_RSRV_OFFSET);
+        edu->process_info_msi = val & ~(EDU_PROC_RSVD_MASK << EDU_PROC_RSVD_OFFSET);
         break;
     }
 }
