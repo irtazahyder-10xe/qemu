@@ -383,10 +383,10 @@ static uint64_t edu_mmio_read(void *opaque, hwaddr addr, unsigned size)
     case 0x98:
         dma_rw(edu, false, &val, &edu->dma.cmd, false);
         break;
-    case EDU_PROC_DMA_OFFSET:
+    case 0xA0:
         val = edu->process_info_dma;
         break;
-    case EDU_PROC_MSI_OFFSET:
+    case 0xA8:
         val = edu->process_info_msi;
         break;
     }
@@ -454,10 +454,10 @@ static void edu_mmio_write(void *opaque, hwaddr addr, uint64_t val,
         }
         dma_rw(edu, true, &val, &edu->dma.cmd, true);
         break;
-    case EDU_PROC_DMA_OFFSET:
+    case 0xA0:
         edu->process_info_dma = val & ~(EDU_PROC_RSVD_MASK << EDU_PROC_RSVD_OFFSET);
         break;
-    case EDU_PROC_MSI_OFFSET:
+    case 0xA8:
         edu->process_info_msi = val & ~(EDU_PROC_RSVD_MASK << EDU_PROC_RSVD_OFFSET);
         break;
     }

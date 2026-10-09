@@ -59,8 +59,6 @@ struct EduState {
     uint64_t dma_mask;
     GHashTable *edu_state_history;
 
-#define EDU_PROC_DMA_OFFSET     0x100
-#define EDU_PROC_MSI_OFFSET     0x104
 #define EDU_PROC_VALID          (1UL << 20)
 #define EDU_PROC_EXEC           (1UL << 21)
 #define EDU_PROC_PRIV           (1UL << 22)
