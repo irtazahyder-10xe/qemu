@@ -135,6 +135,7 @@ typedef struct {
     bool is_proc_valid;
     bool is_priv;
     bool is_write;
+    bool is_instr;
 } lti_LA_s;
 
 #define MRIF_NID_MASK       ((1UL << 10) - 1)
@@ -205,7 +206,7 @@ bool remove_edu_dev_state(uint64_t dev_id);
  *       IO DEVICE.
  */
 uint64_t rtl_trans_reqt(hwaddr iova, bool is_write, bool is_priv,
-                        uint32_t dev_id, bool proc_id_valid,
+                        bool is_instr, uint32_t dev_id, bool proc_id_valid,
                         uint32_t proc_id);
 
 /* ============= AMBA AXI4 Protocol ============= */

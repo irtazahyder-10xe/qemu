@@ -22,12 +22,27 @@ typedef struct {
     dma_addr_t dst;
     dma_addr_t cnt;
     dma_addr_t cmd;
-} dma_state;
+} dma_state_s;
+
+typedef union {
+        struct {
+            uint32_t priv : 1;
+            uint32_t exec : 1;
+            uint32_t process_id : 20;
+        } fields;
+        uint32_t raw;
+} process_state_s;
 
 typedef struct {
+    dma_state_s dma;
+
+    // MSI fields
     bool is_msi;
     MSIMessage msi;
-    dma_state dma;
+
+    // Process Info fields
+    bool pidv;
+    process_state_s proc_info;
 } edu_ghash_entry_s;
 
 struct EduState {
@@ -53,7 +68,7 @@ struct EduState {
 # define EDU_DMA_TO_PCI         1
 #define EDU_DMA_IRQ             0x4
     QemuThread dma_thread;
-    dma_state dma;
+    dma_state_s dma;
     QEMUTimer dma_timer;
     char dma_buf[DMA_SIZE];
     uint64_t dma_mask;

@@ -188,7 +188,7 @@ void read_rtl_trans_resp(void *opaque, const uint8_t *buff, int size)
 }
 
 uint64_t rtl_trans_reqt(hwaddr iova, bool is_write, bool is_priv,
-                        uint32_t dev_id, bool proc_id_valid,
+                        bool is_instr, uint32_t dev_id, bool proc_id_valid,
                         uint32_t proc_id)
 {
     /* Static ID assigned to every function caller to differentiate between
@@ -204,10 +204,11 @@ uint64_t rtl_trans_reqt(hwaddr iova, bool is_write, bool is_priv,
     req.flow_type = LTI_FLOW_NO_STALL;
     req.is_priv = is_priv;
     req.is_write = is_write;
+    req.is_instr = is_instr;
 
     /* Breker has no ATS tests so flow always NO_STALL */
     trace_qrb_lti_reqt(req.id, req.iova, req.dev_id, req.is_proc_valid,
-                       req.proc_id, "NO_STALL", req.is_priv, req.is_write);
+                       req.proc_id, "NO_STALL", req.is_priv, req.is_write, req.is_instr);
 
     /* Sending LTI request to QRB */
     /* TODO: Check for write fails */
