@@ -24,15 +24,6 @@ typedef struct {
     dma_addr_t cmd;
 } dma_state_s;
 
-typedef union {
-        struct {
-            uint32_t priv : 1;
-            uint32_t exec : 1;
-            uint32_t process_id : 20;
-        } fields;
-        uint32_t raw;
-} process_state_s;
-
 typedef struct {
     dma_state_s dma;
 
@@ -42,7 +33,7 @@ typedef struct {
 
     // Process Info fields
     bool pidv;
-    process_state_s proc_info;
+    uint32_t proc_info;
 } edu_ghash_entry_s;
 
 struct EduState {

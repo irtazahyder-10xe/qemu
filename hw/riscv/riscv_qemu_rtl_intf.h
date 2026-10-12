@@ -195,6 +195,7 @@ bool remove_edu_dev_state(uint64_t dev_id);
  * @param iova          IO Virtual Address to be translated
  * @param is_write      Memory read or write operation on address @iova
  * @param is_priv       Priviledged or Unpriviledged access.
+ * @param is_instr      Instruction or Data access
  * @param dev_id        Device ID
  * @param proc_id_valid Validates if @proc_id is valid or garbage
  * @param proc_id       Process ID

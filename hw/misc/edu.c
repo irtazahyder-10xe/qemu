@@ -98,14 +98,12 @@ static void edu_msi_trans(PCIDevice *dev, unsigned int vector)
      * before PASID is enabled.
      */
     uint32_t proc_id = 0;
-    bool priv, exec, proc_valid;
-    priv = exec = proc_valid = false;
+    bool proc_valid = false;
 
     if (pcie_pasid_enabled(&edu->pdev)) {
         proc_valid = !!(edu->process_info_msi & EDU_PROC_VALID);
         if (proc_valid) {
-            exec = !!(edu->process_info_msi & EDU_PROC_EXEC);
-            priv = !!(edu->process_info_msi & EDU_PROC_PRIV);
+            /* MSI priv and exec are always 0 for our device */
             proc_id = edu->process_info_msi & EDU_PROC_PASID_MASK;
         }
     }
@@ -115,7 +113,9 @@ static void edu_msi_trans(PCIDevice *dev, unsigned int vector)
     memcpy(&value->msi, &msg, sizeof(MSIMessage));
     value->is_msi = true;
     value->pidv = proc_valid;
-    id = rtl_trans_reqt(msg.address, true, priv, exec, dev_id, proc_valid, proc_id);
+    value->proc_info = proc_valid ? edu->process_info_msi : 0;
+
+    id = rtl_trans_reqt(msg.address, true, false, false, dev_id, proc_valid, proc_id);
     g_hash_table_insert(edu->edu_state_history, GINT_TO_POINTER(id), value);
     trace_edu_msi(id, msg.address, msg.data, proc_valid ? "TRUE" : "FALSE");
 }
@@ -194,7 +194,8 @@ void edu_perform_dma(void *opaque, lti_LR_s resp)
                                       entry->dma.cmd,
                                       entry->msi.address,
                                       entry->msi.data,
-                                      entry->proc_info.raw);
+                                      entry->pidv,
+                                      entry->proc_info);
 
     /* Discard LTI request if ABORT received on DMA response */
     if (resp.resp == LTI_RESP_FAULT_ABORT)
@@ -266,7 +267,7 @@ void edu_perform_dma(void *opaque, lti_LR_s resp)
 
         edu->dma.cmd &= ~EDU_DMA_RUN;
         if (entry->dma.cmd & EDU_DMA_IRQ) {
-            edu->process_info_msi = entry->pidv ? entry->proc_info.raw : 0;
+            edu->process_info_msi = entry->pidv ? entry->proc_info : 0;
             edu_raise_irq(edu, DMA_IRQ);
         }
     }
@@ -304,14 +305,14 @@ static void edu_dma_timer(void *opaque)
      * before PASID is enabled.
      */
     uint32_t proc_id = 0;
-    bool priv, exec, proc_valid;
-    priv = exec = proc_valid = false;
+    bool exec, priv, proc_valid;
+    exec = priv = proc_valid = false;
 
     if (pcie_pasid_enabled(&edu->pdev)) {
         proc_valid = !!(edu->process_info_dma & EDU_PROC_VALID);
         if (proc_valid) {
-            exec = !!(edu->process_info_dma & EDU_PROC_EXEC);
             priv = !!(edu->process_info_dma & EDU_PROC_PRIV);
+            exec = !!(edu->process_info_dma & EDU_PROC_EXEC);
             proc_id = edu->process_info_dma & EDU_PROC_PASID_MASK;
         }
     }
@@ -323,9 +324,7 @@ static void edu_dma_timer(void *opaque)
     value->pidv = proc_valid;
 
     if (proc_valid) {
-        value->proc_info.fields.process_id = proc_id;
-        value->proc_info.fields.exec = exec;
-        value->proc_info.fields.priv = priv;
+        value->proc_info = edu->process_info_dma;
     }
 
     id = rtl_trans_reqt(edu_clamp_addr(edu, dma_to_pci ? edu->dma.dst : edu->dma.src),
@@ -342,7 +341,10 @@ static void edu_dma_timer(void *opaque)
                           value->dma.cmd,
                           value->msi.address,
                           value->msi.data,
-                          value->proc_info.raw);
+                          value->pidv,
+                          value->proc_info);
+    /* Invalidate process register once DMA is queued */
+    edu->process_info_dma &= ~EDU_PROC_VALID;
 }
 
 static void dma_rw(EduState *edu, bool write, dma_addr_t *val, dma_addr_t *dma,
