@@ -20,6 +20,7 @@
 #include "hw/core/registerfields.h"
 #include "cpu.h"
 #include "exec/cputlb.h"
+#include "accel/tcg/cpu-loop.h"
 #include "accel/tcg/cpu-mmu-index.h"
 #include "exec/page-protection.h"
 #include "exec/target_page.h"
@@ -46,7 +47,8 @@ static int get_physical_address(CPUTriCoreState *env, hwaddr *physical,
     return ret;
 }
 
-hwaddr tricore_cpu_get_phys_page_debug(CPUState *cs, vaddr addr)
+bool tricore_cpu_translate_for_debug(CPUState *cs, vaddr addr,
+                                     TranslateForDebugResult *result)
 {
     TriCoreCPU *cpu = TRICORE_CPU(cs);
     hwaddr phys_addr;
@@ -55,9 +57,15 @@ hwaddr tricore_cpu_get_phys_page_debug(CPUState *cs, vaddr addr)
 
     if (get_physical_address(&cpu->env, &phys_addr, &prot, addr,
                              MMU_DATA_LOAD, mmu_idx)) {
-        return -1;
+        return false;
     }
-    return phys_addr;
+
+    *result = (TranslateForDebugResult) {
+        .physaddr = phys_addr,
+        .lg_page_size = TARGET_PAGE_BITS,
+        .attrs.debug = 1,
+    };
+    return true;
 }
 
 /* TODO: Add exception support */

@@ -159,7 +159,6 @@ static int microvm_ioapics(MicrovmMachineState *mms)
 
 static void microvm_devices_init(MicrovmMachineState *mms)
 {
-    const char *default_firmware;
     X86MachineState *x86ms = X86_MACHINE(mms);
     ISABus *isa_bus;
     GSIState *gsi_state;
@@ -276,10 +275,12 @@ static void microvm_devices_init(MicrovmMachineState *mms)
         serial_hds_isa_init(isa_bus, 0, 1);
     }
 
-    default_firmware = x86_machine_is_acpi_enabled(x86ms)
-            ? MICROVM_BIOS_FILENAME
-            : MICROVM_QBOOT_FILENAME;
-    x86_bios_rom_init(x86ms, default_firmware, get_system_memory(), true);
+    if (!x86ms->igvm) {
+        const char *default_firmware = x86_machine_is_acpi_enabled(x86ms)
+                ? MICROVM_BIOS_FILENAME
+                : MICROVM_QBOOT_FILENAME;
+        x86_bios_rom_init(x86ms, default_firmware, get_system_memory(), true);
+    }
 }
 
 static void microvm_memory_init(MicrovmMachineState *mms)
@@ -319,8 +320,7 @@ static void microvm_memory_init(MicrovmMachineState *mms)
         e820_add_entry(0x100000000ULL, x86ms->above_4g_mem_size, E820_RAM);
     }
 
-    fw_cfg = fw_cfg_init_io_dma(FW_CFG_IO_BASE, FW_CFG_IO_BASE + 4,
-                                &address_space_memory);
+    fw_cfg = fw_cfg_init_io_dma(FW_CFG_IO_BASE, &address_space_memory);
 
     fw_cfg_add_i16(fw_cfg, FW_CFG_NB_CPUS, machine->smp.cpus);
     fw_cfg_add_i16(fw_cfg, FW_CFG_MAX_CPUS, machine->smp.max_cpus);
@@ -416,7 +416,7 @@ static void microvm_fix_kernel_cmdline(MachineState *machine)
     g_free(cmdline);
 }
 
-static void microvm_device_pre_plug_cb(HotplugHandler *hotplug_dev,
+static void microvm_device_pre_plug_cb(const HotplugHandler *hotplug_dev,
                                        DeviceState *dev, Error **errp)
 {
     X86CPU *cpu = X86_CPU(dev);
@@ -425,26 +425,26 @@ static void microvm_device_pre_plug_cb(HotplugHandler *hotplug_dev,
     x86_cpu_pre_plug(hotplug_dev, dev, errp);
 }
 
-static void microvm_device_plug_cb(HotplugHandler *hotplug_dev,
+static void microvm_device_plug_cb(const HotplugHandler *hotplug_dev,
                                    DeviceState *dev, Error **errp)
 {
     x86_cpu_plug(hotplug_dev, dev, errp);
 }
 
-static void microvm_device_unplug_request_cb(HotplugHandler *hotplug_dev,
+static void microvm_device_unplug_request_cb(const HotplugHandler *hotplug_dev,
                                              DeviceState *dev, Error **errp)
 {
     error_setg(errp, "unplug not supported by microvm");
 }
 
-static void microvm_device_unplug_cb(HotplugHandler *hotplug_dev,
+static void microvm_device_unplug_cb(const HotplugHandler *hotplug_dev,
                                      DeviceState *dev, Error **errp)
 {
     error_setg(errp, "unplug not supported by microvm");
 }
 
-static HotplugHandler *microvm_get_hotplug_handler(MachineState *machine,
-                                                   DeviceState *dev)
+static const HotplugHandler *microvm_get_hotplug_handler(MachineState *machine,
+                                                         DeviceState *dev)
 {
     if (object_dynamic_cast(OBJECT(dev), TYPE_CPU)) {
         return HOTPLUG_HANDLER(machine);
@@ -717,6 +717,16 @@ static void microvm_class_init(ObjectClass *oc, const void *data)
 
     compat_props_add(mc->compat_props, microvm_properties,
                      G_N_ELEMENTS(microvm_properties));
+
+#if defined(CONFIG_IGVM)
+    object_class_property_add_link(oc, "igvm-cfg",
+                                   TYPE_IGVM_CFG,
+                                   offsetof(X86MachineState, igvm),
+                                   object_property_allow_set_link,
+                                   OBJ_PROP_LINK_STRONG);
+    object_class_property_set_description(oc, "igvm-cfg",
+                                          "Set IGVM configuration");
+#endif
 }
 
 static const TypeInfo microvm_machine_info = {

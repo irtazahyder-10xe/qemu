@@ -10,7 +10,7 @@
 #include "qemu/error-report.h"
 #include "qemu/guest-random.h"
 #include "qapi/error.h"
-#include "cpu.h"
+#include "target/or1k/cpu.h"
 #include "system/address-spaces.h"
 #include "hw/core/irq.h"
 #include "hw/core/boards.h"
@@ -559,6 +559,7 @@ static const TypeInfo or1ksim_machine_typeinfo = {
     .parent     = TYPE_MACHINE,
     .class_init = openrisc_virt_machine_init,
     .instance_size = sizeof(OR1KVirtState),
+    .is_available = target_or1k,
 };
 
 static void or1ksim_machine_init_register_types(void)

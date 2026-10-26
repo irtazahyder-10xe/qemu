@@ -21,6 +21,7 @@
 #include "qemu/log.h"
 #include "cpu.h"
 #include "exec/cputlb.h"
+#include "accel/tcg/cpu-loop.h"
 #include "accel/tcg/cpu-mmu-index.h"
 #include "accel/tcg/probe.h"
 #include "exec/page-protection.h"
@@ -345,7 +346,8 @@ int hppa_get_physical_address(CPUHPPAState *env, vaddr addr, int mmu_idx,
     return ret;
 }
 
-hwaddr hppa_cpu_get_phys_page_debug(CPUState *cs, vaddr addr)
+bool hppa_cpu_translate_for_debug(CPUState *cs, vaddr addr,
+                                  TranslateForDebugResult *result)
 {
     HPPACPU *cpu = HPPA_CPU(cs);
     hwaddr phys;
@@ -360,10 +362,20 @@ hwaddr hppa_cpu_get_phys_page_debug(CPUState *cs, vaddr addr)
     excp = hppa_get_physical_address(&cpu->env, addr, mmu_idx, 0, 0,
                                      &phys, &prot);
 
-    /* Since we're translating for debugging, the only error that is a
-       hard error is no translation at all.  Otherwise, while a real cpu
-       access might not have permission, the debugger does.  */
-    return excp == EXCP_DTLB_MISS ? -1 : phys;
+    /*
+     * Since we're translating for debugging, the only error that is a
+     * hard error is no translation at all.  Otherwise, while a real cpu
+     * access might not have permission, the debugger does.
+     */
+    if (excp == EXCP_DTLB_MISS) {
+        return false;
+    }
+    *result = (TranslateForDebugResult) {
+        .physaddr = phys,
+        .lg_page_size = TARGET_PAGE_BITS,
+        .attrs.debug = 1,
+    };
+    return true;
 }
 
 void hppa_set_ior_and_isr(CPUHPPAState *env, vaddr addr, bool mmu_disabled)

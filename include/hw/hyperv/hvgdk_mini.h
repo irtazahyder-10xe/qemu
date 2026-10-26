@@ -9,9 +9,31 @@
 
 #define MSHV_IOCTL  0xB8
 
+/* Hyper-V specific model specific registers (MSRs) */
+
+/* HV_X64_SYNTHETIC_MSR */
+#define HV_X64_MSR_GUEST_OS_ID      0x40000000
+#define HV_X64_MSR_HYPERCALL        0x40000001
+#define HV_X64_MSR_VP_INDEX         0x40000002
+#define HV_X64_MSR_RESET            0x40000003
+#define HV_X64_MSR_VP_RUNTIME       0x40000010
+#define HV_X64_MSR_TIME_REF_COUNT   0x40000020
+#define HV_X64_MSR_REFERENCE_TSC    0x40000021
+#define HV_X64_MSR_TSC_FREQUENCY    0x40000022
+#define HV_X64_MSR_APIC_FREQUENCY   0x40000023
+
+/* event_type values for hv_x64_pending_exception_event */
+#define HV_X64_PENDING_EVENT_EXCEPTION 0
+
 typedef enum hv_register_name {
+    /* VP Management Registers */
+    HV_REGISTER_INTERNAL_ACTIVITY_STATE = 0x00000004,
+
     /* Pending Interruption Register */
     HV_REGISTER_PENDING_INTERRUPTION = 0x00010002,
+    HV_REGISTER_INTERRUPT_STATE      = 0x00010003,
+    HV_REGISTER_PENDING_EVENT0       = 0x00010004,
+    HV_REGISTER_PENDING_EVENT1       = 0x00010005,
 
     /* X64 User-Mode Registers */
     HV_X64_REGISTER_RAX     = 0x00020000,
@@ -152,12 +174,25 @@ typedef enum hv_register_name {
     /* Available */
 
     HV_X64_REGISTER_SPEC_CTRL       = 0x00080084,
+    HV_X64_REGISTER_TSC_DEADLINE    = 0x00080095,
     HV_X64_REGISTER_TSC_ADJUST      = 0x00080096,
+
+    /* CET / Shadow Stack */
+    HV_X64_REGISTER_U_XSS                    = 0x0008008B,
+    HV_X64_REGISTER_U_CET                    = 0x0008008C,
+    HV_X64_REGISTER_S_CET                    = 0x0008008D,
+    HV_X64_REGISTER_SSP                      = 0x0008008E,
+    HV_X64_REGISTER_PL0_SSP                  = 0x0008008F,
+    HV_X64_REGISTER_PL1_SSP                  = 0x00080090,
+    HV_X64_REGISTER_PL2_SSP                  = 0x00080091,
+    HV_X64_REGISTER_PL3_SSP                  = 0x00080092,
+    HV_X64_REGISTER_INTERRUPT_SSP_TABLE_ADDR = 0x00080093,
 
     /* Other MSRs */
     HV_X64_REGISTER_MSR_IA32_MISC_ENABLE = 0x000800A0,
 
     /* Misc */
+    HV_X64_REGISTER_HYPERCALL       = 0x00090001,
     HV_REGISTER_GUEST_OS_ID         = 0x00090002,
     HV_REGISTER_REFERENCE_TSC       = 0x00090017,
 
@@ -207,6 +242,29 @@ enum hv_intercept_type {
     HV_INTERCEPT_TYPE_MAX,
     HV_INTERCEPT_TYPE_INVALID               = 0XFFFFFFFF,
 };
+
+union hv_intercept_parameters {
+    /* HV_INTERCEPT_PARAMETERS is defined to be an 8-byte field. */
+    uint64_t as_uint64;
+    /* HV_INTERCEPT_TYPE_X64_IO_PORT */
+    uint16_t io_port;
+    /* HV_INTERCEPT_TYPE_X64_CPUID */
+    uint32_t cpuid_index;
+    /* HV_INTERCEPT_TYPE_X64_APIC_WRITE */
+    uint32_t apic_write_mask;
+    /* HV_INTERCEPT_TYPE_EXCEPTION */
+    uint16_t exception_vector;
+    /* HV_INTERCEPT_TYPE_X64_MSR_INDEX */
+    uint32_t msr_index;
+    /* N.B. Other intercept types do not have any parameters. */
+};
+
+struct hv_input_install_intercept {
+    uint64_t partition_id;
+    uint32_t access_type; /* mask */
+    uint32_t intercept_type; /* enum hv_intercept_type */
+    union hv_intercept_parameters intercept_parameter;
+} QEMU_PACKED;
 
 struct hv_u128 {
     uint64_t low_part;
@@ -453,6 +511,8 @@ typedef struct hv_input_set_vp_registers {
     uint16_t rsvd_z16;
     struct hv_register_assoc elements[];
 } QEMU_PACKED hv_input_set_vp_registers;
+
+#define MSHV_VP_MAX_REGISTERS   128
 
 union hv_interrupt_control {
     uint64_t as_uint64;
@@ -703,6 +763,35 @@ struct hv_x64_memory_intercept_message {
     uint8_t instruction_bytes[16];
 } QEMU_PACKED;
 
+struct hv_x64_exception_intercept_message {
+    struct hv_x64_intercept_message_header header;
+    uint16_t exception_vector;
+    uint8_t exception_info;
+    uint8_t instruction_byte_count;
+    uint32_t error_code;
+    uint64_t exception_parameter; /* DR6 for #DB, CR2 for #PF */
+    uint64_t reserved;
+    uint8_t instruction_bytes[16];
+    struct hv_x64_segment_register ds_segment;
+    struct hv_x64_segment_register ss_segment;
+    uint64_t rax;
+    uint64_t rcx;
+    uint64_t rdx;
+    uint64_t rbx;
+    uint64_t rsp;
+    uint64_t rbp;
+    uint64_t rsi;
+    uint64_t rdi;
+    uint64_t r8;
+    uint64_t r9;
+    uint64_t r10;
+    uint64_t r11;
+    uint64_t r12;
+    uint64_t r13;
+    uint64_t r14;
+    uint64_t r15;
+} QEMU_PACKED;
+
 union hv_message_flags {
     uint8_t asu8;
     struct {
@@ -797,6 +886,7 @@ struct hv_cpuid {
 #define IA32_MSR_DEBUG_CTL        0x1D9
 #define IA32_MSR_SPEC_CTRL        0x00000048
 #define IA32_MSR_TSC_ADJUST       0x0000003b
+#define IA32_MSR_TSC_DEADLINE     0x000006e0
 
 #define IA32_MSR_MISC_ENABLE 0x000001a0
 
@@ -810,6 +900,7 @@ struct hv_cpuid {
 
 #define HVCALL_GET_PARTITION_PROPERTY    0x0044
 #define HVCALL_SET_PARTITION_PROPERTY    0x0045
+#define HVCALL_INSTALL_INTERCEPT         0x004d
 #define HVCALL_GET_VP_REGISTERS          0x0050
 #define HVCALL_SET_VP_REGISTERS          0x0051
 #define HVCALL_TRANSLATE_VIRTUAL_ADDRESS 0x0052

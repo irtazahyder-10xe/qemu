@@ -5,6 +5,20 @@
 #include "loader.h"
 #include "target_elf.h"
 
+#if TARGET_BIG_ENDIAN
+# include "vdso-be.c.inc"
+#else
+# include "vdso-le.c.inc"
+#endif
+
+const VdsoImageInfo *get_vdso_image_info(uint32_t elf_flags G_GNUC_UNUSED)
+{
+#if TARGET_BIG_ENDIAN
+    return &vdso_be_image_info;
+#else
+    return &vdso_le_image_info;
+#endif
+}
 
 const char *get_elf_cpu_model(uint32_t eflags)
 {
@@ -36,6 +50,16 @@ abi_ulong get_elf_hwcap(CPUState *cs)
     }
 
     return hwcap;
+}
+
+void elf_core_copy_fpregs(target_elf_fpregset_t *r, const CPUSH4State *env)
+{
+    for (int i = 0; i < 16; i++) {
+        r->fpregs[i] = tswap32(env->fregs[i]);
+        r->xfpregs[i] = tswap32(env->fregs[16 + i]);
+    }
+    r->fpscr = tswap32(env->fpscr);
+    r->fpul = tswap32(env->fpul);
 }
 
 void elf_core_copy_regs(target_elf_gregset_t *r, const CPUSH4State *env)

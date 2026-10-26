@@ -164,6 +164,17 @@ static inline int tcg_type_size(TCGType t)
     return 4 << i;
 }
 
+/**
+ * tcg_type_bits
+ * @t: type
+ *
+ * Return the size of the type in bits.
+ */
+static inline int tcg_type_bits(TCGType t)
+{
+    return 8 * tcg_type_size(t);
+}
+
 typedef tcg_target_ulong TCGArg;
 
 /* Define type and accessor macros for TCG variables.
@@ -447,7 +458,7 @@ static inline bool temp_readonly(TCGTemp *ts)
 
 extern __thread TCGContext *tcg_ctx;
 extern const void *tcg_code_gen_epilogue;
-extern uintptr_t tcg_splitwx_diff;
+extern ptrdiff_t tcg_splitwx_diff;
 extern TCGv_env tcg_env;
 
 bool in_code_gen_buffer(const void *p);

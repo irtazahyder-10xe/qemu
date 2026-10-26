@@ -10,6 +10,9 @@
 #include "system/tcg.h"
 #include "cpu.h"
 #include "accel/tcg/cpu-mmu-index.h"
+#include "accel/tcg/cpu-ldst.h"
+#include "accel/tcg/getpc.h"
+#include "exec/page-protection.h"
 #include "exec/target_page.h"
 #include "internals.h"
 #include "cpu-csr.h"
@@ -19,27 +22,29 @@
 void get_dir_base_width(CPULoongArchState *env, uint64_t *dir_base,
                         uint64_t *dir_width, unsigned int level)
 {
+    CPUSysState *sys = env_sys(env);
+
     switch (level) {
     case 1:
-        *dir_base = FIELD_EX64(env->CSR_PWCL, CSR_PWCL, DIR1_BASE);
-        *dir_width = FIELD_EX64(env->CSR_PWCL, CSR_PWCL, DIR1_WIDTH);
+        *dir_base = FIELD_EX64(sys->CSR_PWCL, CSR_PWCL, DIR1_BASE);
+        *dir_width = FIELD_EX64(sys->CSR_PWCL, CSR_PWCL, DIR1_WIDTH);
         break;
     case 2:
-        *dir_base = FIELD_EX64(env->CSR_PWCL, CSR_PWCL, DIR2_BASE);
-        *dir_width = FIELD_EX64(env->CSR_PWCL, CSR_PWCL, DIR2_WIDTH);
+        *dir_base = FIELD_EX64(sys->CSR_PWCL, CSR_PWCL, DIR2_BASE);
+        *dir_width = FIELD_EX64(sys->CSR_PWCL, CSR_PWCL, DIR2_WIDTH);
         break;
     case 3:
-        *dir_base = FIELD_EX64(env->CSR_PWCH, CSR_PWCH, DIR3_BASE);
-        *dir_width = FIELD_EX64(env->CSR_PWCH, CSR_PWCH, DIR3_WIDTH);
+        *dir_base = FIELD_EX64(sys->CSR_PWCH, CSR_PWCH, DIR3_BASE);
+        *dir_width = FIELD_EX64(sys->CSR_PWCH, CSR_PWCH, DIR3_WIDTH);
         break;
     case 4:
-        *dir_base = FIELD_EX64(env->CSR_PWCH, CSR_PWCH, DIR4_BASE);
-        *dir_width = FIELD_EX64(env->CSR_PWCH, CSR_PWCH, DIR4_WIDTH);
+        *dir_base = FIELD_EX64(sys->CSR_PWCH, CSR_PWCH, DIR4_BASE);
+        *dir_width = FIELD_EX64(sys->CSR_PWCH, CSR_PWCH, DIR4_WIDTH);
         break;
     default:
         /* level may be zero for ldpte */
-        *dir_base = FIELD_EX64(env->CSR_PWCL, CSR_PWCL, PTBASE);
-        *dir_width = FIELD_EX64(env->CSR_PWCL, CSR_PWCL, PTWIDTH);
+        *dir_base = FIELD_EX64(sys->CSR_PWCL, CSR_PWCL, PTBASE);
+        *dir_width = FIELD_EX64(sys->CSR_PWCL, CSR_PWCL, PTWIDTH);
         break;
     }
 }
@@ -107,60 +112,24 @@ TLBRet loongarch_check_pte(CPULoongArchState *env, MMUContext *context,
     return TLBRET_MATCH;
 }
 
-static MemTxResult loongarch_cmpxchg_phys(CPUState *cs, hwaddr phys,
-                                          uint64_t old, uint64_t new)
-{
-    hwaddr addr1, l = 8;
-    MemoryRegion *mr;
-    uint8_t *ram_ptr;
-    uint64_t old1;
-    MemTxResult ret;
-
-    rcu_read_lock();
-    mr = address_space_translate(cs->as, phys, &addr1, &l,
-                                 false, MEMTXATTRS_UNSPECIFIED);
-    if (!memory_region_is_ram(mr)) {
-        /*
-         * Misconfigured PTE in ROM (AD bits are not preset) or
-         * PTE is in IO space and can't be updated atomically.
-         */
-         rcu_read_unlock();
-         return MEMTX_ACCESS_ERROR;
-    }
-
-    ram_ptr = qemu_map_ram_ptr(mr->ram_block, addr1);
-    old1 = qatomic_cmpxchg((uint64_t *)ram_ptr, cpu_to_le64(old),
-                           cpu_to_le64(new));
-    old1 = le64_to_cpu(old1);
-    if (old1 == old) {
-        ret = MEMTX_OK;
-    } else {
-        ret = MEMTX_DECODE_ERROR;
-    }
-    rcu_read_unlock();
-
-    return ret;
-}
-
 TLBRet loongarch_ptw(CPULoongArchState *env, MMUContext *context,
                      int access_type, int mmu_idx, int debug)
 {
-    CPUState *cs = env_cpu(env);
     hwaddr index = 0, phys = 0;
     uint64_t palen_mask = loongarch_palen_mask(env);
     uint64_t dir_base, dir_width;
-    uint64_t base, pte;
-    int level;
+    uint64_t base, pte, old;
+    int level, ptw_idx = MMU_DA_IDX;
     vaddr address;
     TLBRet ret;
-    MemTxResult ret1;
-
+    CPUSysState *sys = env_sys(env);
+    MemOpIdx oi;
 
     address = context->addr;
     if ((address >> 63) & 0x1) {
-        base = env->CSR_PGDH;
+        base = sys->CSR_PGDH;
     } else {
-        base = env->CSR_PGDL;
+        base = sys->CSR_PGDL;
     }
     base &= palen_mask;
 
@@ -174,7 +143,7 @@ TLBRet loongarch_ptw(CPULoongArchState *env, MMUContext *context,
         /* get next level page directory */
         index = (address >> dir_base) & ((1 << dir_width) - 1);
         phys = base | index << 3;
-        base = ldq_le_phys(cs->as, phys);
+        base = cpu_ldq_le_mmuidx_ra(env, phys, ptw_idx, GETPC());
         if (level) {
             if (FIELD_EX64(base, TLBENTRY, HUGE)) {
                 /* base is a huge pte */
@@ -204,10 +173,13 @@ restart:
         context->pte_buddy[1 - index] = base + BIT_ULL(dir_base);
         base += (BIT_ULL(dir_base) & address);
     } else if (cpu_has_ptw(env)) {
+        uint64_t val;
+
         index &= 1;
         context->pte_buddy[index] = base;
-        context->pte_buddy[1 - index] = ldq_le_phys(cs->as,
-                                                    phys + 8 * (1 - 2 * index));
+        val = cpu_ldq_le_mmuidx_ra(env, phys + 8 * (1 - 2 * index),
+                                   ptw_idx, GETPC());
+        context->pte_buddy[1 - index] = val;
     }
 
     context->ps = dir_base;
@@ -236,10 +208,12 @@ restart:
         if (access_type == MMU_DATA_STORE) {
             base = pte_mkdirty(base);
         }
-        ret1 = loongarch_cmpxchg_phys(cs, phys, pte, base);
+
+        oi = make_memop_idx(MO_LEUQ | MO_64, ptw_idx);
+        old = cpu_atomic_cmpxchgq_le_mmu(env, phys, pte, base, oi, GETPC());
         /* PTE updated by other CPU, reload PTE entry */
-        if (ret1 == MEMTX_DECODE_ERROR) {
-            base = ldq_le_phys(cs->as, phys);
+        if (le64_to_cpu(old) != pte) {
+            base = cpu_ldq_le_mmuidx_ra(env, phys, ptw_idx, GETPC());
             goto restart;
         }
 
@@ -310,13 +284,12 @@ TLBRet get_physical_address(CPULoongArchState *env, MMUContext *context,
     int kernel_mode = mmu_idx == MMU_KERNEL_IDX;
     uint32_t plv, base_c, base_v;
     int64_t addr_high;
-    uint8_t da = FIELD_EX64(env->CSR_CRMD, CSR_CRMD, DA);
-    uint8_t pg = FIELD_EX64(env->CSR_CRMD, CSR_CRMD, PG);
+    CPUSysState *sys = env_sys(env);
     vaddr address;
 
     /* Check PG and DA */
     address = context->addr;
-    if (da & !pg) {
+    if (mmu_idx == MMU_DA_IDX) {
         context->physical = address & loongarch_palen_mask(env);
         context->prot = PAGE_READ | PAGE_WRITE | PAGE_EXEC;
         context->mmu_index = MMU_DA_IDX;
@@ -332,12 +305,12 @@ TLBRet get_physical_address(CPULoongArchState *env, MMUContext *context,
     /* Check direct map window */
     for (int i = 0; i < 4; i++) {
         if (is_la64(env)) {
-            base_c = FIELD_EX64(env->CSR_DMW[i], CSR_DMW_64, VSEG);
+            base_c = FIELD_EX64(sys->CSR_DMW[i], CSR_DMW_64, VSEG);
         } else {
-            base_c = FIELD_EX64(env->CSR_DMW[i], CSR_DMW_32, VSEG);
+            base_c = FIELD_EX64(sys->CSR_DMW[i], CSR_DMW_32, VSEG);
         }
-        if ((plv & env->CSR_DMW[i]) && (base_c == base_v)) {
-            context->physical = dmw_va2pa(env, address, env->CSR_DMW[i]);
+        if ((plv & sys->CSR_DMW[i]) && (base_c == base_v)) {
+            context->physical = dmw_va2pa(env, address, sys->CSR_DMW[i]);
             context->prot = PAGE_READ | PAGE_WRITE | PAGE_EXEC;
             context->mmu_index = MMU_DA_IDX;
             return TLBRET_MATCH;
@@ -354,7 +327,8 @@ TLBRet get_physical_address(CPULoongArchState *env, MMUContext *context,
     return loongarch_map_address(env, context, access_type, mmu_idx, is_debug);
 }
 
-hwaddr loongarch_cpu_get_phys_page_debug(CPUState *cs, vaddr addr)
+bool loongarch_cpu_translate_for_debug(CPUState *cs, vaddr addr,
+                                       TranslateForDebugResult *result)
 {
     CPULoongArchState *env = cpu_env(cs);
     MMUContext context;
@@ -362,9 +336,14 @@ hwaddr loongarch_cpu_get_phys_page_debug(CPUState *cs, vaddr addr)
     context.addr = addr;
     if (get_physical_address(env, &context, MMU_DATA_LOAD,
                              cpu_mmu_index(cs, false), 1) != TLBRET_MATCH) {
-        return -1;
+        return false;
     }
-    return context.physical;
+    *result = (TranslateForDebugResult) {
+        .physaddr = context.physical,
+        .attrs.debug = 1,
+        .lg_page_size = TARGET_PAGE_BITS,
+    };
+    return true;
 }
 
 uint64_t loongarch_palen_mask(CPULoongArchState *env)

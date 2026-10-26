@@ -52,10 +52,7 @@ static int terminal_can_read(void *opaque)
 
 static void terminal_timer_cancel(Terminal3270 *t)
 {
-    if (t->timer_tag) {
-        g_source_remove(t->timer_tag);
-        t->timer_tag = 0;
-    }
+    g_clear_handle_id(&t->timer_tag, g_source_remove);
 }
 
 /*
@@ -172,6 +169,7 @@ static void chr_event(void *opaque, QEMUChrEvent event)
     case CHR_EVENT_BREAK:
     case CHR_EVENT_MUX_IN:
     case CHR_EVENT_MUX_OUT:
+    case CHR_EVENT_RESIZE:
         /* Ignore */
         break;
     }

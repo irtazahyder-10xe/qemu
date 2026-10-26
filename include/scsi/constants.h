@@ -149,6 +149,7 @@
 #define MECHANISM_STATUS      0xbd
 #define READ_CD               0xbe
 #define SEND_DVD_STRUCTURE    0xbf
+#define PR_HELPER_CLEANUP     0xff /* vendor-specific QEMU command */
 
 /*
  * SERVICE ACTION IN subcodes
@@ -339,5 +340,15 @@
 #define PRO_REGISTER_AND_IGNORE_EXISTING_KEY    0x06
 #define PRO_REGISTER_AND_MOVE                   0x07
 #define PRO_REPLACE_LOST_RESERVATION            0x08
+
+/*
+ * Persistent reservation types
+ */
+#define PR_TYPE_WRITE_EXCLUSIVE             0x1
+#define PR_TYPE_EXCLUSIVE_ACCESS            0x3
+#define PR_TYPE_WRITE_EXCLUSIVE_REG_ONLY    0x5
+#define PR_TYPE_EXCLUSIVE_ACCESS_REG_ONLY   0x6
+#define PR_TYPE_WRITE_EXCLUSIVE_ALL_REGS    0x7
+#define PR_TYPE_EXCLUSIVE_ACCESS_ALL_REGS   0x8
 
 #endif

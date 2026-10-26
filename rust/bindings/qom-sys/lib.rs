@@ -8,6 +8,7 @@
     non_upper_case_globals,
     unnecessary_transmutes,
     unsafe_op_in_unsafe_fn,
+    clippy::complexity,
     clippy::pedantic,
     clippy::restriction,
     clippy::style,
@@ -18,7 +19,7 @@
     clippy::too_many_arguments
 )]
 
-use glib_sys::{GHashTable, GHashTableIter, GPtrArray, GSList};
+use glib_sys::{GHashTable, GHashTableIter, GSList};
 use util_sys::{Error, QDict, QObject, Visitor};
 
 #[cfg(MESON)]

@@ -100,6 +100,7 @@ static int qemu_signal_init(Error **errp)
     sigaddset(&set, SIGIO);
     sigaddset(&set, SIGALRM);
     sigaddset(&set, SIGBUS);
+    sigaddset(&set, SIGWINCH);
     /* SIGINT cannot be handled via signalfd, so that ^C can be used
      * to interrupt QEMU when it is being run under gdb.  SIGHUP and
      * SIGTERM are also handled asynchronously, even though it is not
@@ -122,6 +123,38 @@ static int qemu_signal_init(Error **errp)
     qemu_set_fd_handler(sigfd, sigfd_handler, NULL, (void *)(intptr_t)sigfd);
 
     return 0;
+}
+
+static NotifierList sigwinch_notifiers =
+    NOTIFIER_LIST_INITIALIZER(sigwinch_notifiers);
+
+static void sigwinch_handler(int signum)
+{
+    notifier_list_notify(&sigwinch_notifiers, NULL);
+}
+
+void sigwinch_add_notifier(Notifier *n)
+{
+    if (notifier_list_empty(&sigwinch_notifiers)) {
+        struct sigaction action = {
+            .sa_handler = sigwinch_handler,
+        };
+        sigaction(SIGWINCH, &action, NULL);
+    }
+
+    notifier_list_add(&sigwinch_notifiers, n);
+}
+
+void sigwinch_remove_notifier(Notifier *n)
+{
+    notifier_remove(n);
+
+    if (notifier_list_empty(&sigwinch_notifiers)) {
+        struct sigaction action = {
+            .sa_handler = SIG_DFL,
+        };
+        sigaction(SIGWINCH, &action, NULL);
+    }
 }
 
 #else /* _WIN32 */
@@ -218,8 +251,10 @@ static void main_loop_init(EventLoopBase *base, Error **errp)
     mloop = m;
 }
 
-static bool main_loop_can_be_deleted(EventLoopBase *base)
+static bool main_loop_prepare_delete(EventLoopBase *base, Error **errp)
 {
+    error_setg(errp, "Deleting main loop '%s' is not supported",
+               object_get_canonical_path_component(OBJECT(base)));
     return false;
 }
 
@@ -229,7 +264,7 @@ static void main_loop_class_init(ObjectClass *oc, const void *class_data)
 
     bc->init = main_loop_init;
     bc->update_params = main_loop_update_params;
-    bc->can_be_deleted = main_loop_can_be_deleted;
+    bc->prepare_delete = main_loop_prepare_delete;
 }
 
 static const TypeInfo main_loop_info = {

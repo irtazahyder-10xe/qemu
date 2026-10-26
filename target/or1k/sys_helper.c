@@ -23,6 +23,7 @@
 #include "exec/cputlb.h"
 #include "exec/target_page.h"
 #include "exec/helper-proto.h"
+#include "accel/tcg/cpu-loop.h"
 #include "exception.h"
 #ifndef CONFIG_USER_ONLY
 #include "hw/core/boards.h"
@@ -57,7 +58,7 @@ void HELPER(mtspr)(CPUOpenRISCState *env, uint32_t spr, uint32_t rb)
     }
 
     if (is_user(env)) {
-        raise_exception(cpu, EXCP_ILLEGAL);
+        or1k_raise_exception(cpu, EXCP_ILLEGAL);
     }
 
 #ifndef CONFIG_USER_ONLY
@@ -156,7 +157,7 @@ void HELPER(mtspr)(CPUOpenRISCState *env, uint32_t spr, uint32_t rb)
             cpu_restore_state(cs, GETPC());
             env->pc += 4;
             cs->halted = 1;
-            raise_exception(cpu, EXCP_HALTED);
+            or1k_raise_exception(cpu, EXCP_HALTED);
         }
         break;
     case TO_SPR(9, 0):  /* PICMR */
@@ -230,7 +231,7 @@ uint32_t HELPER(mfspr)(CPUOpenRISCState *env, uint32_t rd, uint32_t spr)
     }
 
     if (is_user(env)) {
-        raise_exception(cpu, EXCP_ILLEGAL);
+        or1k_raise_exception(cpu, EXCP_ILLEGAL);
     }
 
 #ifndef CONFIG_USER_ONLY

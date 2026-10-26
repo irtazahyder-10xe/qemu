@@ -230,7 +230,7 @@ qio_channel_websock_extract_headers(QIOChannelWebsock *ioc,
     tmp = strchr(buffer, ' ');
     if (!tmp) {
         error_setg(errp, "Missing HTTP path delimiter");
-        return 0;
+        goto bad_request;
     }
     *tmp = '\0';
 
@@ -457,7 +457,7 @@ static void qio_channel_websock_handshake_process(QIOChannelWebsock *ioc,
     connectionv = g_strsplit(connection, ",", 0);
     for (i = 0; connectionv != NULL && connectionv[i] != NULL; i++) {
         g_strstrip(connectionv[i]);
-        if (strcasecmp(connectionv[i],
+        if (g_ascii_strcasecmp(connectionv[i],
                        QIO_CHANNEL_WEBSOCK_CONNECTION_UPGRADE) == 0) {
             upgraded = true;
         }
@@ -468,7 +468,7 @@ static void qio_channel_websock_handshake_process(QIOChannelWebsock *ioc,
         goto bad_request;
     }
 
-    if (strcasecmp(upgrade, QIO_CHANNEL_WEBSOCK_UPGRADE_WEBSOCKET) != 0) {
+    if (g_ascii_strcasecmp(upgrade, QIO_CHANNEL_WEBSOCK_UPGRADE_WEBSOCKET) != 0) {
         error_setg(errp, "Incorrect upgrade method '%s'", upgrade);
         goto bad_request;
     }
@@ -492,6 +492,9 @@ static int qio_channel_websock_handshake_read(QIOChannelWebsock *ioc,
     buffer_reserve(&ioc->encinput, want);
     ret = qio_channel_read(ioc->master,
                            (char *)buffer_end(&ioc->encinput), want, errp);
+    if (ret == QIO_CHANNEL_ERR_BLOCK) {
+        return 0;
+    }
     if (ret < 0) {
         return -1;
     }
@@ -561,6 +564,11 @@ static gboolean qio_channel_websock_handshake_send(QIOChannel *ioc,
                             (char *)wioc->encoutput.buffer,
                             wioc->encoutput.offset,
                             &err);
+
+    if (ret == QIO_CHANNEL_ERR_BLOCK) {
+        /* Socket buffer is full, the G_IO_OUT watch stays armed */
+        return TRUE;
+    }
 
     if (ret < 0) {
         trace_qio_channel_websock_handshake_fail(ioc, error_get_pretty(err));
@@ -950,12 +958,8 @@ static void qio_channel_websock_finalize(Object *obj)
     buffer_free(&ioc->encinput);
     buffer_free(&ioc->encoutput);
     buffer_free(&ioc->rawinput);
-    if (ioc->hs_io_tag) {
-        g_source_remove(ioc->hs_io_tag);
-    }
-    if (ioc->io_tag) {
-        g_source_remove(ioc->io_tag);
-    }
+    g_clear_handle_id(&ioc->hs_io_tag, g_source_remove);
+    g_clear_handle_id(&ioc->io_tag, g_source_remove);
     error_free(ioc->io_err);
     object_unref(OBJECT(ioc->master));
 }
@@ -966,7 +970,8 @@ static ssize_t qio_channel_websock_read_wire(QIOChannelWebsock *ioc,
 {
     ssize_t ret;
 
-    if (ioc->encinput.offset < 4096) {
+    if (ioc->encinput.offset < 4096 &&
+        ioc->rawinput.offset < QIO_CHANNEL_WEBSOCK_MAX_BUFFER) {
         size_t want = 4096 - ioc->encinput.offset;
 
         buffer_reserve(&ioc->encinput, want);
@@ -1070,10 +1075,7 @@ static gboolean qio_channel_websock_flush(QIOChannel *ioc,
 
 static void qio_channel_websock_unset_watch(QIOChannelWebsock *ioc)
 {
-    if (ioc->io_tag) {
-        g_source_remove(ioc->io_tag);
-        ioc->io_tag = 0;
-    }
+    g_clear_handle_id(&ioc->io_tag, g_source_remove);
 }
 
 static void qio_channel_websock_set_watch(QIOChannelWebsock *ioc)
@@ -1090,6 +1092,7 @@ static void qio_channel_websock_set_watch(QIOChannelWebsock *ioc)
         cond |= G_IO_OUT;
     }
     if (ioc->encinput.offset < QIO_CHANNEL_WEBSOCK_MAX_BUFFER &&
+        ioc->rawinput.offset < QIO_CHANNEL_WEBSOCK_MAX_BUFFER &&
         !ioc->io_eof) {
         cond |= G_IO_IN;
     }
@@ -1250,12 +1253,8 @@ static int qio_channel_websock_close(QIOChannel *ioc,
     buffer_free(&wioc->encinput);
     buffer_free(&wioc->encoutput);
     buffer_free(&wioc->rawinput);
-    if (wioc->hs_io_tag) {
-        g_clear_handle_id(&wioc->hs_io_tag, g_source_remove);
-    }
-    if (wioc->io_tag) {
-        g_clear_handle_id(&wioc->io_tag, g_source_remove);
-    }
+    g_clear_handle_id(&wioc->hs_io_tag, g_source_remove);
+    g_clear_handle_id(&wioc->io_tag, g_source_remove);
     if (wioc->io_err) {
         g_clear_pointer(&wioc->io_err, error_free);
     }

@@ -49,8 +49,8 @@ void tpm_test_swtpm_test(const char *src_tpm_path, tx_func *tx,
     args = g_strdup_printf(
         "%s "
         "-chardev socket,id=chr,path=%s "
-        "-tpmdev emulator,id=dev,chardev=chr "
-        "-device %s,tpmdev=dev",
+        "-tpmdev emulator,id=tpm0,chardev=chr "
+        "-device %s,tpmdev=tpm0",
         machine_options ? : "", addr->u.q_unix.path, ifmodel);
 
     s = qtest_start(args);
@@ -59,11 +59,16 @@ void tpm_test_swtpm_test(const char *src_tpm_path, tx_func *tx,
     tpm_util_startup(s, tx);
     tpm_util_pcrextend(s, tx);
 
-    static const unsigned char tpm_pcrread_resp[] =
-        "\x80\x01\x00\x00\x00\x3e\x00\x00\x00\x00\x00\x00\x00\x16\x00\x00"
-        "\x00\x01\x00\x0b\x03\x00\x04\x00\x00\x00\x00\x01\x00\x20\xf6\x85"
-        "\x98\xe5\x86\x8d\xe6\x8b\x97\x29\x99\x60\xf2\x71\x7d\x17\x67\x89"
-        "\xa4\x2f\x9a\xae\xa8\xc7\xb7\xaa\x79\xa8\x62\x56\xc1\xde";
+    static const unsigned char tpm_pcrread_resp[] = {
+        0x80, 0x01, 0x00, 0x00, 0x00, 0x3e, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x16, 0x00, 0x00,
+        0x00, 0x01, 0x00, 0x0b, 0x03, 0x00, 0x04, 0x00,
+        0x00, 0x00, 0x00, 0x01, 0x00, 0x20, 0xf6, 0x85,
+        0x98, 0xe5, 0x86, 0x8d, 0xe6, 0x8b, 0x97, 0x29,
+        0x99, 0x60, 0xf2, 0x71, 0x7d, 0x17, 0x67, 0x89,
+        0xa4, 0x2f, 0x9a, 0xae, 0xa8, 0xc7, 0xb7, 0xaa,
+        0x79, 0xa8, 0x62, 0x56, 0xc1, 0xde
+    };
     tpm_util_pcrread(s, tx, tpm_pcrread_resp,
                      sizeof(tpm_pcrread_resp));
 
@@ -72,6 +77,62 @@ void tpm_test_swtpm_test(const char *src_tpm_path, tx_func *tx,
 
     g_unlink(addr->u.q_unix.path);
     qapi_free_SocketAddress(addr);
+}
+
+/* Setup the TPM and send a command by calling a passed function */
+static void
+tpm_test_simple_cmd_swtpm_test(const char *src_tpm_path, tx_func *tx,
+                               const char *ifmodel,
+                               const char *machine_options,
+                               void (*test_func)(QTestState *, tx_func))
+{
+    char *args = NULL;
+    QTestState *s;
+    SocketAddress *addr = NULL;
+    gboolean succ;
+    GPid swtpm_pid;
+    GError *error = NULL;
+
+    if (tpm_test_swtpm_skip()) {
+        return;
+    }
+
+    succ = tpm_util_swtpm_start(src_tpm_path, &swtpm_pid, &addr, &error);
+    g_assert_true(succ);
+
+    args = g_strdup_printf(
+        "%s "
+        "-chardev socket,id=chr,path=%s "
+        "-tpmdev emulator,id=tpm0,chardev=chr "
+        "-device %s,tpmdev=tpm0",
+        machine_options ? : "", addr->u.q_unix.path, ifmodel);
+
+    s = qtest_start(args);
+    g_free(args);
+
+    test_func(s, tx);
+
+    qtest_end();
+    tpm_util_swtpm_kill(swtpm_pid);
+
+    g_unlink(addr->u.q_unix.path);
+    qapi_free_SocketAddress(addr);
+}
+
+void tpm_test_short_write_swtpm_test(const char *src_tpm_path, tx_func *tx,
+                                     const char *ifmodel,
+                                     const char *machine_options)
+{
+    tpm_test_simple_cmd_swtpm_test(src_tpm_path, tx, ifmodel, machine_options,
+                                   tpm_util_short_write);
+}
+
+void tpm_test_too_short_cmd_swtpm_test(const char *src_tpm_path, tx_func *tx,
+                                       const char *ifmodel,
+                                       const char *machine_options)
+{
+    tpm_test_simple_cmd_swtpm_test(src_tpm_path, tx, ifmodel, machine_options,
+                                   tpm_util_too_short_cmd);
 }
 
 void tpm_test_swtpm_migration_test(const char *src_tpm_path,
@@ -105,11 +166,16 @@ void tpm_test_swtpm_migration_test(const char *src_tpm_path,
     tpm_util_startup(src_qemu, tx);
     tpm_util_pcrextend(src_qemu, tx);
 
-    static const unsigned char tpm_pcrread_resp[] =
-        "\x80\x01\x00\x00\x00\x3e\x00\x00\x00\x00\x00\x00\x00\x16\x00\x00"
-        "\x00\x01\x00\x0b\x03\x00\x04\x00\x00\x00\x00\x01\x00\x20\xf6\x85"
-        "\x98\xe5\x86\x8d\xe6\x8b\x97\x29\x99\x60\xf2\x71\x7d\x17\x67\x89"
-        "\xa4\x2f\x9a\xae\xa8\xc7\xb7\xaa\x79\xa8\x62\x56\xc1\xde";
+    static const unsigned char tpm_pcrread_resp[] = {
+        0x80, 0x01, 0x00, 0x00, 0x00, 0x3e, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x16, 0x00, 0x00,
+        0x00, 0x01, 0x00, 0x0b, 0x03, 0x00, 0x04, 0x00,
+        0x00, 0x00, 0x00, 0x01, 0x00, 0x20, 0xf6, 0x85,
+        0x98, 0xe5, 0x86, 0x8d, 0xe6, 0x8b, 0x97, 0x29,
+        0x99, 0x60, 0xf2, 0x71, 0x7d, 0x17, 0x67, 0x89,
+        0xa4, 0x2f, 0x9a, 0xae, 0xa8, 0xc7, 0xb7, 0xaa,
+        0x79, 0xa8, 0x62, 0x56, 0xc1, 0xde,
+    };
     tpm_util_pcrread(src_qemu, tx, tpm_pcrread_resp,
                      sizeof(tpm_pcrread_resp));
 

@@ -18,6 +18,7 @@
 #include "qemu/osdep.h"
 #include "semihosting/semihost.h"
 #include "semihosting/console.h"
+#include "accel/tcg/cpu-loop.h"
 #include "exec/cpu-common.h"
 #include "exec/gdbstub.h"
 #include "qemu/log.h"
@@ -105,6 +106,11 @@ int qemu_semihosting_console_read(CPUState *cs, void *buf, int len)
     } while (ret < len && !fifo8_is_empty(&c->fifo));
 
     return ret;
+}
+
+bool qemu_semihosting_console_has_chardev(void)
+{
+    return console.chr != NULL;
 }
 
 int qemu_semihosting_console_write(void *buf, int len)

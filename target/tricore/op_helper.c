@@ -19,6 +19,7 @@
 #include "qemu/host-utils.h"
 #include "exec/helper-proto.h"
 #include "accel/tcg/cpu-ldst.h"
+#include "accel/tcg/cpu-loop.h"
 #include "qemu/plugin.h"
 #include <zlib.h> /* for crc32 */
 
@@ -42,7 +43,7 @@ void raise_exception_sync_internal(CPUTriCoreState *env, uint32_t class, int tin
     if (class == TRAPC_CTX_MNG && tin == TIN3_FCU) {
         /* upper context cannot be saved, if the context list is empty */
     } else {
-        helper_svucx(env);
+        HELPER(svucx)(env);
     }
 
     /* The return address in a[11] is updated */
@@ -98,7 +99,7 @@ void raise_exception_sync_internal(CPUTriCoreState *env, uint32_t class, int tin
     cpu_loop_exit(cs);
 }
 
-void helper_raise_exception_sync(CPUTriCoreState *env, uint32_t class,
+void HELPER(raise_exception_sync)(CPUTriCoreState *env, uint32_t class,
                                  uint32_t tin)
 {
     raise_exception_sync_internal(env, class, tin, 0, 0);
@@ -125,7 +126,7 @@ static uint16_t reverse16(uint16_t val)
     return (rh << 8) | rl;
 }
 
-uint32_t helper_br_update(uint32_t reg)
+uint32_t HELPER(br_update)(uint32_t reg)
 {
     uint32_t index = reg & 0xffff;
     uint32_t incr  = reg >> 16;
@@ -133,7 +134,7 @@ uint32_t helper_br_update(uint32_t reg)
     return reg - index + new_index;
 }
 
-uint32_t helper_circ_update(uint32_t reg, uint32_t off)
+uint32_t HELPER(circ_update)(uint32_t reg, uint32_t off)
 {
     uint32_t index = reg & 0xffff;
     uint32_t length = reg >> 16;
@@ -265,7 +266,7 @@ static uint32_t suov16(CPUTriCoreState *env, int32_t hw0, int32_t hw1)
     return (hw0 & 0xffff) | (hw1 << 16);
 }
 
-uint32_t helper_add_ssov(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
+uint32_t HELPER(add_ssov)(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
 {
     int64_t t1 = sextract64(r1, 0, 32);
     int64_t t2 = sextract64(r2, 0, 32);
@@ -273,7 +274,7 @@ uint32_t helper_add_ssov(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
     return ssov32(env, result);
 }
 
-uint64_t helper_add64_ssov(CPUTriCoreState *env, uint64_t r1, uint64_t r2)
+uint64_t HELPER(add64_ssov)(CPUTriCoreState *env, uint64_t r1, uint64_t r2)
 {
     uint64_t result;
     int64_t ovf;
@@ -298,7 +299,7 @@ uint64_t helper_add64_ssov(CPUTriCoreState *env, uint64_t r1, uint64_t r2)
     return result;
 }
 
-uint32_t helper_add_h_ssov(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
+uint32_t HELPER(add_h_ssov)(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
 {
     int32_t ret_hw0, ret_hw1;
 
@@ -307,7 +308,7 @@ uint32_t helper_add_h_ssov(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
     return ssov16(env, ret_hw0, ret_hw1);
 }
 
-uint32_t helper_addr_h_ssov(CPUTriCoreState *env, uint64_t r1, uint32_t r2_l,
+uint32_t HELPER(addr_h_ssov)(CPUTriCoreState *env, uint64_t r1, uint32_t r2_l,
                             uint32_t r2_h)
 {
     int64_t mul_res0 = sextract64(r1, 0, 32);
@@ -353,7 +354,7 @@ uint32_t helper_addr_h_ssov(CPUTriCoreState *env, uint64_t r1, uint32_t r2_l,
     return (result1 & 0xffff0000ULL) | ((result0 >> 16) & 0xffffULL);
 }
 
-uint32_t helper_addsur_h_ssov(CPUTriCoreState *env, uint64_t r1, uint32_t r2_l,
+uint32_t HELPER(addsur_h_ssov)(CPUTriCoreState *env, uint64_t r1, uint32_t r2_l,
                               uint32_t r2_h)
 {
     int64_t mul_res0 = sextract64(r1, 0, 32);
@@ -400,7 +401,7 @@ uint32_t helper_addsur_h_ssov(CPUTriCoreState *env, uint64_t r1, uint32_t r2_l,
 }
 
 
-uint32_t helper_add_suov(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
+uint32_t HELPER(add_suov)(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
 {
     int64_t t1 = extract64(r1, 0, 32);
     int64_t t2 = extract64(r2, 0, 32);
@@ -408,7 +409,7 @@ uint32_t helper_add_suov(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
     return suov32_pos(env, result);
 }
 
-uint32_t helper_add_h_suov(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
+uint32_t HELPER(add_h_suov)(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
 {
     int32_t ret_hw0, ret_hw1;
 
@@ -417,7 +418,7 @@ uint32_t helper_add_h_suov(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
     return suov16(env, ret_hw0, ret_hw1);
 }
 
-uint32_t helper_sub_ssov(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
+uint32_t HELPER(sub_ssov)(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
 {
     int64_t t1 = sextract64(r1, 0, 32);
     int64_t t2 = sextract64(r2, 0, 32);
@@ -425,7 +426,7 @@ uint32_t helper_sub_ssov(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
     return ssov32(env, result);
 }
 
-uint64_t helper_sub64_ssov(CPUTriCoreState *env, uint64_t r1, uint64_t r2)
+uint64_t HELPER(sub64_ssov)(CPUTriCoreState *env, uint64_t r1, uint64_t r2)
 {
     uint64_t result;
     int64_t ovf;
@@ -450,7 +451,7 @@ uint64_t helper_sub64_ssov(CPUTriCoreState *env, uint64_t r1, uint64_t r2)
     return result;
 }
 
-uint32_t helper_sub_h_ssov(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
+uint32_t HELPER(sub_h_ssov)(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
 {
     int32_t ret_hw0, ret_hw1;
 
@@ -459,7 +460,7 @@ uint32_t helper_sub_h_ssov(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
     return ssov16(env, ret_hw0, ret_hw1);
 }
 
-uint32_t helper_subr_h_ssov(CPUTriCoreState *env, uint64_t r1, uint32_t r2_l,
+uint32_t HELPER(subr_h_ssov)(CPUTriCoreState *env, uint64_t r1, uint32_t r2_l,
                             uint32_t r2_h)
 {
     int64_t mul_res0 = sextract64(r1, 0, 32);
@@ -505,7 +506,7 @@ uint32_t helper_subr_h_ssov(CPUTriCoreState *env, uint64_t r1, uint32_t r2_l,
     return (result1 & 0xffff0000ULL) | ((result0 >> 16) & 0xffffULL);
 }
 
-uint32_t helper_subadr_h_ssov(CPUTriCoreState *env, uint64_t r1, uint32_t r2_l,
+uint32_t HELPER(subadr_h_ssov)(CPUTriCoreState *env, uint64_t r1, uint32_t r2_l,
                               uint32_t r2_h)
 {
     int64_t mul_res0 = sextract64(r1, 0, 32);
@@ -551,7 +552,7 @@ uint32_t helper_subadr_h_ssov(CPUTriCoreState *env, uint64_t r1, uint32_t r2_l,
     return (result1 & 0xffff0000ULL) | ((result0 >> 16) & 0xffffULL);
 }
 
-uint32_t helper_sub_suov(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
+uint32_t HELPER(sub_suov)(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
 {
     int64_t t1 = extract64(r1, 0, 32);
     int64_t t2 = extract64(r2, 0, 32);
@@ -559,7 +560,7 @@ uint32_t helper_sub_suov(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
     return suov32_neg(env, result);
 }
 
-uint32_t helper_sub_h_suov(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
+uint32_t HELPER(sub_h_suov)(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
 {
     int32_t ret_hw0, ret_hw1;
 
@@ -568,7 +569,7 @@ uint32_t helper_sub_h_suov(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
     return suov16(env, ret_hw0, ret_hw1);
 }
 
-uint32_t helper_mul_ssov(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
+uint32_t HELPER(mul_ssov)(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
 {
     int64_t t1 = sextract64(r1, 0, 32);
     int64_t t2 = sextract64(r2, 0, 32);
@@ -576,7 +577,7 @@ uint32_t helper_mul_ssov(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
     return ssov32(env, result);
 }
 
-uint32_t helper_mul_suov(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
+uint32_t HELPER(mul_suov)(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
 {
     int64_t t1 = extract64(r1, 0, 32);
     int64_t t2 = extract64(r2, 0, 32);
@@ -585,7 +586,7 @@ uint32_t helper_mul_suov(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
     return suov32_pos(env, result);
 }
 
-uint32_t helper_sha_ssov(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
+uint32_t HELPER(sha_ssov)(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
 {
     int64_t t1 = sextract64(r1, 0, 32);
     int32_t t2 = sextract64(r2, 0, 6);
@@ -600,14 +601,14 @@ uint32_t helper_sha_ssov(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
     return ssov32(env, result);
 }
 
-uint32_t helper_abs_ssov(CPUTriCoreState *env, uint32_t r1)
+uint32_t HELPER(abs_ssov)(CPUTriCoreState *env, uint32_t r1)
 {
     uint32_t result;
     result = ((int32_t)r1 >= 0) ? r1 : (0 - r1);
     return ssov32(env, result);
 }
 
-uint32_t helper_abs_h_ssov(CPUTriCoreState *env, uint32_t r1)
+uint32_t HELPER(abs_h_ssov)(CPUTriCoreState *env, uint32_t r1)
 {
     int32_t ret_h0, ret_h1;
 
@@ -620,7 +621,7 @@ uint32_t helper_abs_h_ssov(CPUTriCoreState *env, uint32_t r1)
     return ssov16(env, ret_h0, ret_h1);
 }
 
-uint32_t helper_absdif_ssov(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
+uint32_t HELPER(absdif_ssov)(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
 {
     int64_t t1 = sextract64(r1, 0, 32);
     int64_t t2 = sextract64(r2, 0, 32);
@@ -634,7 +635,7 @@ uint32_t helper_absdif_ssov(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
     return ssov32(env, result);
 }
 
-uint32_t helper_absdif_h_ssov(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
+uint32_t HELPER(absdif_h_ssov)(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
 {
     int32_t t1, t2;
     int32_t ret_h0, ret_h1;
@@ -658,7 +659,7 @@ uint32_t helper_absdif_h_ssov(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
     return ssov16(env, ret_h0, ret_h1);
 }
 
-uint32_t helper_madd32_ssov(CPUTriCoreState *env, uint32_t r1,
+uint32_t HELPER(madd32_ssov)(CPUTriCoreState *env, uint32_t r1,
                             uint32_t r2, uint32_t r3)
 {
     int64_t t1 = sextract64(r1, 0, 32);
@@ -670,7 +671,7 @@ uint32_t helper_madd32_ssov(CPUTriCoreState *env, uint32_t r1,
     return ssov32(env, result);
 }
 
-uint32_t helper_madd32_suov(CPUTriCoreState *env, uint32_t r1,
+uint32_t HELPER(madd32_suov)(CPUTriCoreState *env, uint32_t r1,
                             uint32_t r2, uint32_t r3)
 {
     uint64_t t1 = extract64(r1, 0, 32);
@@ -682,7 +683,7 @@ uint32_t helper_madd32_suov(CPUTriCoreState *env, uint32_t r1,
     return suov32_pos(env, result);
 }
 
-uint64_t helper_madd64_ssov(CPUTriCoreState *env, uint32_t r1,
+uint64_t HELPER(madd64_ssov)(CPUTriCoreState *env, uint32_t r1,
                             uint64_t r2, uint32_t r3)
 {
     uint64_t ret, ovf;
@@ -716,7 +717,7 @@ uint64_t helper_madd64_ssov(CPUTriCoreState *env, uint32_t r1,
 }
 
 uint32_t
-helper_madd32_q_add_ssov(CPUTriCoreState *env, uint64_t r1, uint64_t r2)
+HELPER(madd32_q_add_ssov)(CPUTriCoreState *env, uint64_t r1, uint64_t r2)
 {
     int64_t result;
 
@@ -756,7 +757,7 @@ helper_madd32_q_add_ssov(CPUTriCoreState *env, uint64_t r1, uint64_t r2)
     return (uint32_t)result;
 }
 
-uint64_t helper_madd64_q_ssov(CPUTriCoreState *env, uint64_t r1, uint32_t r2,
+uint64_t HELPER(madd64_q_ssov)(CPUTriCoreState *env, uint64_t r1, uint32_t r2,
                               uint32_t r3, uint32_t n)
 {
     int64_t t1 = (int64_t)r1;
@@ -807,7 +808,7 @@ uint64_t helper_madd64_q_ssov(CPUTriCoreState *env, uint64_t r1, uint32_t r2,
     return (uint64_t)result;
 }
 
-uint32_t helper_maddr_q_ssov(CPUTriCoreState *env, uint32_t r1, uint32_t r2,
+uint32_t HELPER(maddr_q_ssov)(CPUTriCoreState *env, uint32_t r1, uint32_t r2,
                              uint32_t r3, uint32_t n)
 {
     int64_t t1 = sextract64(r1, 0, 32);
@@ -840,7 +841,7 @@ uint32_t helper_maddr_q_ssov(CPUTriCoreState *env, uint32_t r1, uint32_t r2,
     return ret & 0xffff0000ll;
 }
 
-uint64_t helper_madd64_suov(CPUTriCoreState *env, uint32_t r1,
+uint64_t HELPER(madd64_suov)(CPUTriCoreState *env, uint32_t r1,
                             uint64_t r2, uint32_t r3)
 {
     uint64_t ret, mul;
@@ -865,7 +866,7 @@ uint64_t helper_madd64_suov(CPUTriCoreState *env, uint32_t r1,
     return ret;
 }
 
-uint32_t helper_msub32_ssov(CPUTriCoreState *env, uint32_t r1,
+uint32_t HELPER(msub32_ssov)(CPUTriCoreState *env, uint32_t r1,
                             uint32_t r2, uint32_t r3)
 {
     int64_t t1 = sextract64(r1, 0, 32);
@@ -877,7 +878,7 @@ uint32_t helper_msub32_ssov(CPUTriCoreState *env, uint32_t r1,
     return ssov32(env, result);
 }
 
-uint32_t helper_msub32_suov(CPUTriCoreState *env, uint32_t r1,
+uint32_t HELPER(msub32_suov)(CPUTriCoreState *env, uint32_t r1,
                             uint32_t r2, uint32_t r3)
 {
     uint64_t t1 = extract64(r1, 0, 32);
@@ -904,7 +905,7 @@ uint32_t helper_msub32_suov(CPUTriCoreState *env, uint32_t r1,
     return result;
 }
 
-uint64_t helper_msub64_ssov(CPUTriCoreState *env, uint32_t r1,
+uint64_t HELPER(msub64_ssov)(CPUTriCoreState *env, uint32_t r1,
                             uint64_t r2, uint32_t r3)
 {
     uint64_t ret, ovf;
@@ -936,7 +937,7 @@ uint64_t helper_msub64_ssov(CPUTriCoreState *env, uint32_t r1,
     return ret;
 }
 
-uint64_t helper_msub64_suov(CPUTriCoreState *env, uint32_t r1,
+uint64_t HELPER(msub64_suov)(CPUTriCoreState *env, uint32_t r1,
                             uint64_t r2, uint32_t r3)
 {
     uint64_t ret, mul;
@@ -962,7 +963,7 @@ uint64_t helper_msub64_suov(CPUTriCoreState *env, uint32_t r1,
 }
 
 uint32_t
-helper_msub32_q_sub_ssov(CPUTriCoreState *env, uint64_t r1, uint64_t r2)
+HELPER(msub32_q_sub_ssov)(CPUTriCoreState *env, uint64_t r1, uint64_t r2)
 {
     int64_t result;
     int64_t t1 = (int64_t)r1;
@@ -1004,7 +1005,7 @@ helper_msub32_q_sub_ssov(CPUTriCoreState *env, uint64_t r1, uint64_t r2)
     return (uint32_t)result;
 }
 
-uint64_t helper_msub64_q_ssov(CPUTriCoreState *env, uint64_t r1, uint32_t r2,
+uint64_t HELPER(msub64_q_ssov)(CPUTriCoreState *env, uint64_t r1, uint32_t r2,
                               uint32_t r3, uint32_t n)
 {
     int64_t t1 = (int64_t)r1;
@@ -1056,7 +1057,7 @@ uint64_t helper_msub64_q_ssov(CPUTriCoreState *env, uint64_t r1, uint32_t r2,
     return (uint64_t)result;
 }
 
-uint32_t helper_msubr_q_ssov(CPUTriCoreState *env, uint32_t r1, uint32_t r2,
+uint32_t HELPER(msubr_q_ssov)(CPUTriCoreState *env, uint32_t r1, uint32_t r2,
                              uint32_t r3, uint32_t n)
 {
     int64_t t1 = sextract64(r1, 0, 32);
@@ -1089,7 +1090,7 @@ uint32_t helper_msubr_q_ssov(CPUTriCoreState *env, uint32_t r1, uint32_t r2,
     return ret & 0xffff0000ll;
 }
 
-uint32_t helper_abs_b(CPUTriCoreState *env, uint32_t arg)
+uint32_t HELPER(abs_b)(CPUTriCoreState *env, uint32_t arg)
 {
     int32_t b, i;
     int32_t ovf = 0;
@@ -1112,7 +1113,7 @@ uint32_t helper_abs_b(CPUTriCoreState *env, uint32_t arg)
     return ret;
 }
 
-uint32_t helper_abs_h(CPUTriCoreState *env, uint32_t arg)
+uint32_t HELPER(abs_h)(CPUTriCoreState *env, uint32_t arg)
 {
     int32_t h, i;
     int32_t ovf = 0;
@@ -1135,7 +1136,7 @@ uint32_t helper_abs_h(CPUTriCoreState *env, uint32_t arg)
     return ret;
 }
 
-uint32_t helper_absdif_b(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
+uint32_t HELPER(absdif_b)(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
 {
     int32_t b, i;
     int32_t extr_r2;
@@ -1159,7 +1160,7 @@ uint32_t helper_absdif_b(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
     return ret;
 }
 
-uint32_t helper_absdif_h(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
+uint32_t HELPER(absdif_h)(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
 {
     int32_t h, i;
     int32_t extr_r2;
@@ -1184,7 +1185,7 @@ uint32_t helper_absdif_h(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
     return ret;
 }
 
-uint32_t helper_addr_h(CPUTriCoreState *env, uint64_t r1, uint32_t r2_l,
+uint32_t HELPER(addr_h)(CPUTriCoreState *env, uint64_t r1, uint32_t r2_l,
                        uint32_t r2_h)
 {
     int64_t mul_res0 = sextract64(r1, 0, 32);
@@ -1222,7 +1223,7 @@ uint32_t helper_addr_h(CPUTriCoreState *env, uint64_t r1, uint32_t r2_l,
     return (result1 & 0xffff0000ULL) | ((result0 >> 16) & 0xffffULL);
 }
 
-uint32_t helper_addsur_h(CPUTriCoreState *env, uint64_t r1, uint32_t r2_l,
+uint32_t HELPER(addsur_h)(CPUTriCoreState *env, uint64_t r1, uint32_t r2_l,
                          uint32_t r2_h)
 {
     int64_t mul_res0 = sextract64(r1, 0, 32);
@@ -1260,7 +1261,7 @@ uint32_t helper_addsur_h(CPUTriCoreState *env, uint64_t r1, uint32_t r2_l,
     return (result1 & 0xffff0000ULL) | ((result0 >> 16) & 0xffffULL);
 }
 
-uint32_t helper_maddr_q(CPUTriCoreState *env, uint32_t r1, uint32_t r2,
+uint32_t HELPER(maddr_q)(CPUTriCoreState *env, uint32_t r1, uint32_t r2,
                         uint32_t r3, uint32_t n)
 {
     int64_t t1 = sextract64(r1, 0, 32);
@@ -1288,7 +1289,7 @@ uint32_t helper_maddr_q(CPUTriCoreState *env, uint32_t r1, uint32_t r2,
     return ret & 0xffff0000ll;
 }
 
-uint32_t helper_add_b(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
+uint32_t HELPER(add_b)(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
 {
     int32_t b, i;
     int32_t extr_r1, extr_r2;
@@ -1314,7 +1315,7 @@ uint32_t helper_add_b(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
     return ret;
 }
 
-uint32_t helper_add_h(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
+uint32_t HELPER(add_h)(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
 {
     int32_t h, i;
     int32_t extr_r1, extr_r2;
@@ -1339,7 +1340,7 @@ uint32_t helper_add_h(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
     return ret;
 }
 
-uint32_t helper_subr_h(CPUTriCoreState *env, uint64_t r1, uint32_t r2_l,
+uint32_t HELPER(subr_h)(CPUTriCoreState *env, uint64_t r1, uint32_t r2_l,
                        uint32_t r2_h)
 {
     int64_t mul_res0 = sextract64(r1, 0, 32);
@@ -1377,7 +1378,7 @@ uint32_t helper_subr_h(CPUTriCoreState *env, uint64_t r1, uint32_t r2_l,
     return (result1 & 0xffff0000ULL) | ((result0 >> 16) & 0xffffULL);
 }
 
-uint32_t helper_subadr_h(CPUTriCoreState *env, uint64_t r1, uint32_t r2_l,
+uint32_t HELPER(subadr_h)(CPUTriCoreState *env, uint64_t r1, uint32_t r2_l,
                          uint32_t r2_h)
 {
     int64_t mul_res0 = sextract64(r1, 0, 32);
@@ -1415,7 +1416,7 @@ uint32_t helper_subadr_h(CPUTriCoreState *env, uint64_t r1, uint32_t r2_l,
     return (result1 & 0xffff0000ULL) | ((result0 >> 16) & 0xffffULL);
 }
 
-uint32_t helper_msubr_q(CPUTriCoreState *env, uint32_t r1, uint32_t r2,
+uint32_t HELPER(msubr_q)(CPUTriCoreState *env, uint32_t r1, uint32_t r2,
                         uint32_t r3, uint32_t n)
 {
     int64_t t1 = sextract64(r1, 0, 32);
@@ -1443,7 +1444,7 @@ uint32_t helper_msubr_q(CPUTriCoreState *env, uint32_t r1, uint32_t r2,
     return ret & 0xffff0000ll;
 }
 
-uint32_t helper_sub_b(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
+uint32_t HELPER(sub_b)(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
 {
     int32_t b, i;
     int32_t extr_r1, extr_r2;
@@ -1469,7 +1470,7 @@ uint32_t helper_sub_b(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
     return ret;
 }
 
-uint32_t helper_sub_h(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
+uint32_t HELPER(sub_h)(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
 {
     int32_t h, i;
     int32_t extr_r1, extr_r2;
@@ -1494,7 +1495,7 @@ uint32_t helper_sub_h(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
     return ret;
 }
 
-uint32_t helper_eq_b(uint32_t r1, uint32_t r2)
+uint32_t HELPER(eq_b)(uint32_t r1, uint32_t r2)
 {
     uint32_t ret, msk;
     int32_t i;
@@ -1511,7 +1512,7 @@ uint32_t helper_eq_b(uint32_t r1, uint32_t r2)
     return ret;
 }
 
-uint32_t helper_eq_h(uint32_t r1, uint32_t r2)
+uint32_t HELPER(eq_h)(uint32_t r1, uint32_t r2)
 {
     int32_t ret = 0;
 
@@ -1526,7 +1527,7 @@ uint32_t helper_eq_h(uint32_t r1, uint32_t r2)
     return ret;
 }
 
-uint32_t helper_eqany_b(uint32_t r1, uint32_t r2)
+uint32_t HELPER(eqany_b)(uint32_t r1, uint32_t r2)
 {
     int32_t i;
     uint32_t ret = 0;
@@ -1538,7 +1539,7 @@ uint32_t helper_eqany_b(uint32_t r1, uint32_t r2)
     return ret;
 }
 
-uint32_t helper_eqany_h(uint32_t r1, uint32_t r2)
+uint32_t HELPER(eqany_h)(uint32_t r1, uint32_t r2)
 {
     uint32_t ret;
 
@@ -1548,7 +1549,7 @@ uint32_t helper_eqany_h(uint32_t r1, uint32_t r2)
     return ret;
 }
 
-uint32_t helper_lt_b(uint32_t r1, uint32_t r2)
+uint32_t HELPER(lt_b)(uint32_t r1, uint32_t r2)
 {
     int32_t i;
     uint32_t ret = 0;
@@ -1562,7 +1563,7 @@ uint32_t helper_lt_b(uint32_t r1, uint32_t r2)
     return ret;
 }
 
-uint32_t helper_lt_bu(uint32_t r1, uint32_t r2)
+uint32_t HELPER(lt_bu)(uint32_t r1, uint32_t r2)
 {
     int32_t i;
     uint32_t ret = 0;
@@ -1576,7 +1577,7 @@ uint32_t helper_lt_bu(uint32_t r1, uint32_t r2)
     return ret;
 }
 
-uint32_t helper_lt_h(uint32_t r1, uint32_t r2)
+uint32_t HELPER(lt_h)(uint32_t r1, uint32_t r2)
 {
     uint32_t ret = 0;
 
@@ -1591,7 +1592,7 @@ uint32_t helper_lt_h(uint32_t r1, uint32_t r2)
     return ret;
 }
 
-uint32_t helper_lt_hu(uint32_t r1, uint32_t r2)
+uint32_t HELPER(lt_hu)(uint32_t r1, uint32_t r2)
 {
     uint32_t ret = 0;
 
@@ -1607,7 +1608,7 @@ uint32_t helper_lt_hu(uint32_t r1, uint32_t r2)
 }
 
 #define EXTREMA_H_B(name, op)                                 \
-uint32_t helper_##name ##_b(uint32_t r1, uint32_t r2)         \
+uint32_t HELPER(name ##_b)(uint32_t r1, uint32_t r2)          \
 {                                                             \
     int32_t i, extr_r1, extr_r2;                              \
     uint32_t ret = 0;                                         \
@@ -1621,7 +1622,7 @@ uint32_t helper_##name ##_b(uint32_t r1, uint32_t r2)         \
     return ret;                                               \
 }                                                             \
                                                               \
-uint32_t helper_##name ##_bu(uint32_t r1, uint32_t r2)        \
+uint32_t HELPER(name ##_bu)(uint32_t r1, uint32_t r2)         \
 {                                                             \
     int32_t i;                                                \
     uint32_t extr_r1, extr_r2;                                \
@@ -1636,7 +1637,7 @@ uint32_t helper_##name ##_bu(uint32_t r1, uint32_t r2)        \
     return ret;                                               \
 }                                                             \
                                                               \
-uint32_t helper_##name ##_h(uint32_t r1, uint32_t r2)         \
+uint32_t HELPER(name ##_h)(uint32_t r1, uint32_t r2)          \
 {                                                             \
     int32_t extr_r1, extr_r2;                                 \
     uint32_t ret = 0;                                         \
@@ -1654,7 +1655,7 @@ uint32_t helper_##name ##_h(uint32_t r1, uint32_t r2)         \
     return ret;                                               \
 }                                                             \
                                                               \
-uint32_t helper_##name ##_hu(uint32_t r1, uint32_t r2)        \
+uint32_t HELPER(name ##_hu)(uint32_t r1, uint32_t r2)         \
 {                                                             \
     uint32_t extr_r1, extr_r2;                                \
     uint32_t ret = 0;                                         \
@@ -1672,7 +1673,7 @@ uint32_t helper_##name ##_hu(uint32_t r1, uint32_t r2)        \
     return ret;                                               \
 }                                                             \
                                                               \
-uint64_t helper_ix##name(uint64_t r1, uint32_t r2)            \
+uint64_t HELPER(ix##name)(uint64_t r1, uint32_t r2)           \
 {                                                             \
     int64_t r2l, r2h, r1hl;                                   \
     uint64_t ret = 0;                                         \
@@ -1694,7 +1695,7 @@ uint64_t helper_ix##name(uint64_t r1, uint32_t r2)            \
     return ret;                                               \
 }                                                             \
                                                               \
-uint64_t helper_ix##name ##_u(uint64_t r1, uint32_t r2)       \
+uint64_t HELPER(ix##name ##_u)(uint64_t r1, uint32_t r2)      \
 {                                                             \
     int64_t r2l, r2h, r1hl;                                   \
     uint64_t ret = 0;                                         \
@@ -1721,7 +1722,7 @@ EXTREMA_H_B(min, <)
 
 #undef EXTREMA_H_B
 
-uint32_t helper_clo_h(uint32_t r1)
+uint32_t HELPER(clo_h)(uint32_t r1)
 {
     uint32_t ret_hw0 = extract32(r1, 0, 16);
     uint32_t ret_hw1 = extract32(r1, 16, 16);
@@ -1739,7 +1740,7 @@ uint32_t helper_clo_h(uint32_t r1)
     return ret_hw0 | (ret_hw1 << 16);
 }
 
-uint32_t helper_clz_h(uint32_t r1)
+uint32_t HELPER(clz_h)(uint32_t r1)
 {
     uint32_t ret_hw0 = extract32(r1, 0, 16);
     uint32_t ret_hw1 = extract32(r1, 16, 16);
@@ -1757,7 +1758,7 @@ uint32_t helper_clz_h(uint32_t r1)
     return ret_hw0 | (ret_hw1 << 16);
 }
 
-uint32_t helper_cls_h(uint32_t r1)
+uint32_t HELPER(cls_h)(uint32_t r1)
 {
     uint32_t ret_hw0 = extract32(r1, 0, 16);
     uint32_t ret_hw1 = extract32(r1, 16, 16);
@@ -1775,7 +1776,7 @@ uint32_t helper_cls_h(uint32_t r1)
     return ret_hw0 | (ret_hw1 << 16);
 }
 
-uint32_t helper_sh(uint32_t r1, uint32_t r2)
+uint32_t HELPER(sh)(uint32_t r1, uint32_t r2)
 {
     int32_t shift_count = sextract32(r2, 0, 6);
 
@@ -1788,7 +1789,7 @@ uint32_t helper_sh(uint32_t r1, uint32_t r2)
     }
 }
 
-uint32_t helper_sh_h(uint32_t r1, uint32_t r2)
+uint32_t HELPER(sh_h)(uint32_t r1, uint32_t r2)
 {
     int32_t ret_hw0, ret_hw1;
     int32_t shift_count;
@@ -1808,7 +1809,7 @@ uint32_t helper_sh_h(uint32_t r1, uint32_t r2)
     }
 }
 
-uint32_t helper_sha(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
+uint32_t HELPER(sha)(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
 {
     int32_t shift_count;
     int64_t result, t1;
@@ -1846,7 +1847,7 @@ uint32_t helper_sha(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
     return ret;
 }
 
-uint32_t helper_sha_h(uint32_t r1, uint32_t r2)
+uint32_t HELPER(sha_h)(uint32_t r1, uint32_t r2)
 {
     int32_t shift_count;
     int32_t ret_hw0, ret_hw1;
@@ -1866,7 +1867,7 @@ uint32_t helper_sha_h(uint32_t r1, uint32_t r2)
     }
 }
 
-uint32_t helper_bmerge(uint32_t r1, uint32_t r2)
+uint32_t HELPER(bmerge)(uint32_t r1, uint32_t r2)
 {
     uint32_t i, ret;
 
@@ -1880,7 +1881,7 @@ uint32_t helper_bmerge(uint32_t r1, uint32_t r2)
     return ret;
 }
 
-uint64_t helper_bsplit(uint32_t r1)
+uint64_t HELPER(bsplit)(uint32_t r1)
 {
     int32_t i;
     uint64_t ret;
@@ -1897,7 +1898,7 @@ uint64_t helper_bsplit(uint32_t r1)
     return ret;
 }
 
-uint32_t helper_parity(uint32_t r1)
+uint32_t HELPER(parity)(uint32_t r1)
 {
     uint32_t ret;
     uint32_t nOnes, i;
@@ -1933,7 +1934,7 @@ uint32_t helper_parity(uint32_t r1)
     return ret;
 }
 
-uint32_t helper_pack(uint32_t carry, uint32_t r1_low, uint32_t r1_high,
+uint32_t HELPER(pack)(uint32_t carry, uint32_t r1_low, uint32_t r1_high,
                      uint32_t r2)
 {
     uint32_t ret;
@@ -1975,7 +1976,7 @@ uint32_t helper_pack(uint32_t carry, uint32_t r1_low, uint32_t r1_high,
     return ret;
 }
 
-uint64_t helper_unpack(uint32_t arg1)
+uint64_t HELPER(unpack)(uint32_t arg1)
 {
     int32_t fp_exp  = extract32(arg1, 23, 8);
     int32_t fp_frac = extract32(arg1, 0, 23);
@@ -2003,7 +2004,7 @@ uint64_t helper_unpack(uint32_t arg1)
     return ret;
 }
 
-uint64_t helper_dvinit_b_13(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
+uint64_t HELPER(dvinit_b_13)(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
 {
     uint64_t ret;
     int32_t abs_sig_dividend, abs_divisor;
@@ -2026,7 +2027,7 @@ uint64_t helper_dvinit_b_13(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
     return ret;
 }
 
-uint64_t helper_dvinit_b_131(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
+uint64_t HELPER(dvinit_b_131)(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
 {
     uint64_t ret = sextract32(r1, 0, 32);
 
@@ -2043,7 +2044,7 @@ uint64_t helper_dvinit_b_131(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
     return ret;
 }
 
-uint64_t helper_dvinit_h_13(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
+uint64_t HELPER(dvinit_h_13)(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
 {
     uint64_t ret;
     int32_t abs_sig_dividend, abs_divisor;
@@ -2066,7 +2067,7 @@ uint64_t helper_dvinit_h_13(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
     return ret;
 }
 
-uint64_t helper_dvinit_h_131(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
+uint64_t HELPER(dvinit_h_131)(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
 {
     uint64_t ret = sextract32(r1, 0, 32);
 
@@ -2083,7 +2084,7 @@ uint64_t helper_dvinit_h_131(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
     return ret;
 }
 
-uint64_t helper_dvadj(uint64_t r1, uint32_t r2)
+uint64_t HELPER(dvadj)(uint64_t r1, uint32_t r2)
 {
     int32_t x_sign = (r1 >> 63);
     int32_t q_sign = x_sign ^ (r2 >> 31);
@@ -2106,7 +2107,7 @@ uint64_t helper_dvadj(uint64_t r1, uint32_t r2)
     return remainder | quotient;
 }
 
-uint64_t helper_dvstep(uint64_t r1, uint32_t r2)
+uint64_t HELPER(dvstep)(uint64_t r1, uint32_t r2)
 {
     int32_t dividend_sign = extract64(r1, 63, 1);
     int32_t divisor_sign = extract32(r2, 31, 1);
@@ -2138,7 +2139,7 @@ uint64_t helper_dvstep(uint64_t r1, uint32_t r2)
     return ((uint64_t)remainder << 32) | (uint32_t)dividend_quotient;
 }
 
-uint64_t helper_dvstep_u(uint64_t r1, uint32_t r2)
+uint64_t HELPER(dvstep_u)(uint64_t r1, uint32_t r2)
 {
     int32_t dividend_quotient = extract64(r1, 0, 32);
     int64_t remainder = extract64(r1, 32, 32);
@@ -2156,7 +2157,7 @@ uint64_t helper_dvstep_u(uint64_t r1, uint32_t r2)
     return ((uint64_t)remainder << 32) | (uint32_t)dividend_quotient;
 }
 
-uint64_t helper_divide(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
+uint64_t HELPER(divide)(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
 {
     int32_t quotient, remainder;
     int32_t dividend = (int32_t)r1;
@@ -2185,7 +2186,7 @@ uint64_t helper_divide(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
     return ((uint64_t)remainder << 32) | (uint32_t)quotient;
 }
 
-uint64_t helper_divide_u(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
+uint64_t HELPER(divide_u)(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
 {
     uint32_t quotient, remainder;
     uint32_t dividend = r1;
@@ -2205,7 +2206,7 @@ uint64_t helper_divide_u(CPUTriCoreState *env, uint32_t r1, uint32_t r2)
     return ((uint64_t)remainder << 32) | quotient;
 }
 
-uint64_t helper_mul_h(uint32_t arg00, uint32_t arg01,
+uint64_t HELPER(mul_h)(uint32_t arg00, uint32_t arg01,
                       uint32_t arg10, uint32_t arg11, uint32_t n)
 {
     uint32_t result0, result1;
@@ -2227,7 +2228,7 @@ uint64_t helper_mul_h(uint32_t arg00, uint32_t arg01,
     return (((uint64_t)result1 << 32)) | result0;
 }
 
-uint64_t helper_mulm_h(uint32_t arg00, uint32_t arg01,
+uint64_t HELPER(mulm_h)(uint32_t arg00, uint32_t arg01,
                        uint32_t arg10, uint32_t arg11, uint32_t n)
 {
     uint64_t ret;
@@ -2252,7 +2253,7 @@ uint64_t helper_mulm_h(uint32_t arg00, uint32_t arg01,
     ret = ret << 16;
     return ret;
 }
-uint32_t helper_mulr_h(uint32_t arg00, uint32_t arg01,
+uint32_t HELPER(mulr_h)(uint32_t arg00, uint32_t arg01,
                        uint32_t arg10, uint32_t arg11, uint32_t n)
 {
     uint32_t result0, result1;
@@ -2275,7 +2276,7 @@ uint32_t helper_mulr_h(uint32_t arg00, uint32_t arg01,
     return (result1 & 0xffff0000) | (result0 >> 16);
 }
 
-uint32_t helper_crc32b(uint32_t arg0, uint32_t arg1)
+uint32_t HELPER(crc32b)(uint32_t arg0, uint32_t arg1)
 {
     uint8_t buf[1] = { arg0 & 0xff };
 
@@ -2283,7 +2284,7 @@ uint32_t helper_crc32b(uint32_t arg0, uint32_t arg1)
 }
 
 
-uint32_t helper_crc32_be(uint32_t arg0, uint32_t arg1)
+uint32_t HELPER(crc32_be)(uint32_t arg0, uint32_t arg1)
 {
     uint8_t buf[4];
     stl_be_p(buf, arg0);
@@ -2291,7 +2292,7 @@ uint32_t helper_crc32_be(uint32_t arg0, uint32_t arg1)
     return crc32(arg1, buf, 4);
 }
 
-uint32_t helper_crc32_le(uint32_t arg0, uint32_t arg1)
+uint32_t HELPER(crc32_le)(uint32_t arg0, uint32_t arg1)
 {
     uint8_t buf[4];
     stl_le_p(buf, arg0);
@@ -2324,7 +2325,7 @@ static uint32_t crc_div(uint32_t crc_in, uint32_t data, uint32_t gen,
     return crc_in;
 }
 
-uint32_t helper_crcn(uint32_t arg0, uint32_t arg1, uint32_t arg2)
+uint32_t HELPER(crcn)(uint32_t arg0, uint32_t arg1, uint32_t arg2)
 {
     uint32_t crc_out, crc_in;
     uint32_t n = extract32(arg0, 12, 4) + 1;
@@ -2362,7 +2363,7 @@ uint32_t helper_crcn(uint32_t arg0, uint32_t arg1, uint32_t arg2)
     return extract32(crc_out, 0, n);
 }
 
-uint32_t helper_shuffle(uint32_t arg0, uint32_t arg1)
+uint32_t HELPER(shuffle)(uint32_t arg0, uint32_t arg1)
 {
     uint32_t resb;
     uint32_t byte_select;
@@ -2531,7 +2532,7 @@ static void restore_context_lower(CPUTriCoreState *env, uint32_t ea,
     env->gpr_d[7] = cpu_ldl_le_data(env, ea + 60);
 }
 
-void helper_call(CPUTriCoreState *env, uint32_t next_pc)
+void HELPER(call)(CPUTriCoreState *env, uint32_t next_pc)
 {
     uint32_t tmp_FCX;
     uint32_t ea;
@@ -2594,7 +2595,7 @@ void helper_call(CPUTriCoreState *env, uint32_t next_pc)
     psw_write(env, psw);
 }
 
-void helper_ret(CPUTriCoreState *env)
+void HELPER(ret)(CPUTriCoreState *env)
 {
     uint32_t ea;
     uint32_t new_PCXI;
@@ -2647,7 +2648,7 @@ void helper_ret(CPUTriCoreState *env)
     }
 }
 
-void helper_bisr(CPUTriCoreState *env, uint32_t const9)
+void HELPER(bisr)(CPUTriCoreState *env, uint32_t const9)
 {
     uint32_t tmp_FCX;
     uint32_t ea;
@@ -2691,7 +2692,7 @@ void helper_bisr(CPUTriCoreState *env, uint32_t const9)
     }
 }
 
-void helper_rfe(CPUTriCoreState *env)
+void HELPER(rfe)(CPUTriCoreState *env)
 {
     uint32_t ea;
     uint32_t new_PCXI;
@@ -2735,7 +2736,7 @@ void helper_rfe(CPUTriCoreState *env)
     psw_write(env, new_PSW);
 }
 
-void helper_rfm(CPUTriCoreState *env)
+void HELPER(rfm)(CPUTriCoreState *env)
 {
     env->PC = (env->gpr_a[11] & ~0x1);
     /* ICR.IE = PCXI.PIE; */
@@ -2754,31 +2755,31 @@ void helper_rfm(CPUTriCoreState *env)
     }
 }
 
-void helper_ldlcx(CPUTriCoreState *env, uint32_t ea)
+void HELPER(ldlcx)(CPUTriCoreState *env, uint32_t ea)
 {
     uint32_t dummy;
     /* insn doesn't load PCXI and RA */
     restore_context_lower(env, ea, &dummy, &dummy);
 }
 
-void helper_lducx(CPUTriCoreState *env, uint32_t ea)
+void HELPER(lducx)(CPUTriCoreState *env, uint32_t ea)
 {
     uint32_t dummy;
     /* insn doesn't load PCXI and PSW */
     restore_context_upper(env, ea, &dummy, &dummy);
 }
 
-void helper_stlcx(CPUTriCoreState *env, uint32_t ea)
+void HELPER(stlcx)(CPUTriCoreState *env, uint32_t ea)
 {
     save_context_lower(env, ea);
 }
 
-void helper_stucx(CPUTriCoreState *env, uint32_t ea)
+void HELPER(stucx)(CPUTriCoreState *env, uint32_t ea)
 {
     save_context_upper(env, ea);
 }
 
-void helper_svlcx(CPUTriCoreState *env)
+void HELPER(svlcx)(CPUTriCoreState *env)
 {
     uint32_t tmp_FCX;
     uint32_t ea;
@@ -2821,7 +2822,7 @@ void helper_svlcx(CPUTriCoreState *env)
     }
 }
 
-void helper_svucx(CPUTriCoreState *env)
+void HELPER(svucx)(CPUTriCoreState *env)
 {
     uint32_t tmp_FCX;
     uint32_t ea;
@@ -2864,7 +2865,7 @@ void helper_svucx(CPUTriCoreState *env)
     }
 }
 
-void helper_rslcx(CPUTriCoreState *env)
+void HELPER(rslcx)(CPUTriCoreState *env)
 {
     uint32_t ea;
     uint32_t new_PCXI;
@@ -2896,12 +2897,12 @@ void helper_rslcx(CPUTriCoreState *env)
     env->PCXI = new_PCXI;
 }
 
-void helper_psw_write(CPUTriCoreState *env, uint32_t arg)
+void HELPER(psw_write)(CPUTriCoreState *env, uint32_t arg)
 {
     psw_write(env, arg);
 }
 
-uint32_t helper_psw_read(CPUTriCoreState *env)
+uint32_t HELPER(psw_read)(CPUTriCoreState *env)
 {
     return psw_read(env);
 }

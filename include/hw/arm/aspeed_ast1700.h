@@ -41,14 +41,12 @@ struct AspeedAST1700SoCState {
     MemoryRegion sram;
     AspeedSMCState spi;
     AspeedADCState adc;
-    AspeedSCUState scu;
+    Aspeed2700SCUState scu;
     AspeedGPIOState gpio;
     AspeedSGPIOState sgpiom[AST1700_SGPIO_NUM];
     AspeedI2CState i2c;
     AspeedPWMState pwm;
     AspeedWDTState wdt[AST1700_WDT_NUM];
-
-    UnimplementedDeviceState i3c;
 };
 
 #endif /* ASPEED_AST1700_H */

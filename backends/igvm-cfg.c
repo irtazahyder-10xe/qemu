@@ -34,6 +34,19 @@ static void set_igvm(Object *obj, const char *value, Error **errp)
     igvm->filename = g_strdup(value);
 }
 
+static char *get_cmdline(Object *obj, Error **errp)
+{
+    IgvmCfg *igvm = IGVM_CFG(obj);
+    return g_strdup(igvm->cmdline);
+}
+
+static void set_cmdline(Object *obj, const char *value, Error **errp)
+{
+    IgvmCfg *igvm = IGVM_CFG(obj);
+    g_free(igvm->cmdline);
+    igvm->cmdline = g_strdup(value);
+}
+
 static ResettableState *igvm_reset_state(Object *obj)
 {
     IgvmCfg *igvm = IGVM_CFG(obj);
@@ -52,6 +65,8 @@ static void igvm_reset_hold(Object *obj, ResetType type)
 
     trace_igvm_reset_hold(type);
 
+    /* cleanup existing memory regions first */
+    qigvm_cleanup_memory(igvm);
     qigvm_process_file(igvm, ms, false, &error_fatal);
 }
 
@@ -65,6 +80,7 @@ static void igvm_complete(UserCreatable *uc, Error **errp)
     IgvmCfg *igvm = IGVM_CFG(uc);
 
     igvm->file = qigvm_file_init(igvm->filename, errp);
+    QTAILQ_INIT(&igvm->memory_regions);
 }
 
 OBJECT_DEFINE_TYPE_WITH_INTERFACES(IgvmCfg, igvm_cfg, IGVM_CFG, OBJECT,
@@ -81,6 +97,13 @@ static void igvm_cfg_class_init(ObjectClass *oc, const void *data)
     object_class_property_add_str(oc, "file", get_igvm, set_igvm);
     object_class_property_set_description(oc, "file",
                                           "Set the IGVM filename to use");
+
+    object_class_property_add_str(oc, "cmdline", get_cmdline, set_cmdline);
+    object_class_property_set_description(oc, "cmdline",
+                                          "Set the command line for the "
+                                          "software loaded from the IGVM "
+                                          "file (copied verbatim, not "
+                                          "parsed by QEMU)");
 
     igvmc->process = qigvm_process_file;
 
@@ -108,4 +131,6 @@ static void igvm_cfg_finalize(Object *obj)
     if (igvm->file >= 0) {
         igvm_free(igvm->file);
     }
+    g_free(igvm->filename);
+    g_free(igvm->cmdline);
 }

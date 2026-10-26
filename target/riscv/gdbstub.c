@@ -20,6 +20,8 @@
 #include "exec/gdbstub.h"
 #include "gdbstub/helpers.h"
 #include "cpu.h"
+#include "internals.h"
+#include "target/riscv/tcg/csr.h"
 
 struct TypeSize {
     const char *gdb_type;
@@ -47,9 +49,30 @@ static const struct TypeSize vec_lanes[] = {
     { "uint8", "bytes", 8, 'b' },
 };
 
-int riscv_cpu_gdb_read_register(CPUState *cs, GByteArray *mem_buf, int n)
+static uint64_t ldn(CPURISCVState *env, uint8_t *mem_buf, size_t regsz)
+{
+    return (mo_endian_env(env) == MO_LE ? ldn_le_p : ldn_be_p)(mem_buf, regsz);
+}
+
+static int riscv_gdb_get_reg_mxl(CPUState *cs,
+                                 GByteArray *buf, uint64_t val)
 {
     RISCVCPUClass *mcc = RISCV_CPU_GET_CLASS(cs);
+
+    switch (mcc->def->misa_mxl_max) {
+    case MXL_RV32:
+        return gdb_get_reg32(buf, val);
+    case MXL_RV64:
+    case MXL_RV128:
+        return gdb_get_reg64(buf, val);
+    default:
+        g_assert_not_reached();
+    }
+    return 0;
+}
+
+int riscv_cpu_gdb_read_register(CPUState *cs, GByteArray *mem_buf, int n)
+{
     RISCVCPU *cpu = RISCV_CPU(cs);
     CPURISCVState *env = &cpu->env;
     uint64_t tmp;
@@ -62,16 +85,7 @@ int riscv_cpu_gdb_read_register(CPUState *cs, GByteArray *mem_buf, int n)
         return 0;
     }
 
-    switch (mcc->def->misa_mxl_max) {
-    case MXL_RV32:
-        return gdb_get_reg32(mem_buf, tmp);
-    case MXL_RV64:
-    case MXL_RV128:
-        return gdb_get_reg64(mem_buf, tmp);
-    default:
-        g_assert_not_reached();
-    }
-    return 0;
+    return riscv_gdb_get_reg_mxl(cs, mem_buf, tmp);
 }
 
 int riscv_cpu_gdb_write_register(CPUState *cs, uint8_t *mem_buf, int n)
@@ -79,33 +93,20 @@ int riscv_cpu_gdb_write_register(CPUState *cs, uint8_t *mem_buf, int n)
     RISCVCPUClass *mcc = RISCV_CPU_GET_CLASS(cs);
     RISCVCPU *cpu = RISCV_CPU(cs);
     CPURISCVState *env = &cpu->env;
-    int length = 0;
-    uint64_t tmp;
+    const size_t regsize = mcc->def->misa_mxl_max == MXL_RV32 ? 4 : 8;
+    uint64_t tmp = ldn(env, mem_buf, regsize);
 
-    switch (mcc->def->misa_mxl_max) {
-    case MXL_RV32:
-        tmp = (int32_t)ldl_p(mem_buf);
-        length = 4;
-        break;
-    case MXL_RV64:
-    case MXL_RV128:
-        if (env->xl < MXL_RV64) {
-            tmp = (int32_t)ldq_p(mem_buf);
-        } else {
-            tmp = ldq_p(mem_buf);
-        }
-        length = 8;
-        break;
-    default:
-        g_assert_not_reached();
+    if (env->xl < MXL_RV64) {
+        tmp = (int32_t)tmp;
     }
+
     if (n > 0 && n < 32) {
         env->gpr[n] = tmp;
     } else if (n == 32) {
         env->pc = tmp;
     }
 
-    return length;
+    return regsize;
 }
 
 static int riscv_gdb_get_fpu(CPUState *cs, GByteArray *buf, int n)
@@ -130,7 +131,7 @@ static int riscv_gdb_set_fpu(CPUState *cs, uint8_t *mem_buf, int n)
     CPURISCVState *env = &cpu->env;
 
     if (n < 32) {
-        env->fpr[n] = ldq_p(mem_buf); /* always 64-bit */
+        env->fpr[n] = ldn(env, mem_buf, 8); /* always 64-bit */
         return sizeof(uint64_t);
     }
     return 0;
@@ -162,7 +163,7 @@ static int riscv_gdb_set_vector(CPUState *cs, uint8_t *mem_buf, int n)
     if (n < 32) {
         int i;
         for (i = 0; i < vlenb; i += 8) {
-            env->vreg[(n * vlenb + i) / 8] = ldq_p(mem_buf + i);
+            env->vreg[(n * vlenb + i) / 8] = ldn(env, mem_buf + i, 8);
         }
         return vlenb;
     }
@@ -170,6 +171,7 @@ static int riscv_gdb_set_vector(CPUState *cs, uint8_t *mem_buf, int n)
     return 0;
 }
 
+#ifdef CONFIG_TCG
 static int riscv_gdb_get_csr(CPUState *cs, GByteArray *buf, int n)
 {
     RISCVCPU *cpu = RISCV_CPU(cs);
@@ -181,7 +183,7 @@ static int riscv_gdb_get_csr(CPUState *cs, GByteArray *buf, int n)
 
         result = riscv_csrrw_debug(env, n, &val, 0, 0);
         if (result == RISCV_EXCP_NONE) {
-            return gdb_get_regl(buf, val);
+            return riscv_gdb_get_reg_mxl(cs, buf, val);
         }
     }
     return 0;
@@ -194,7 +196,7 @@ static int riscv_gdb_set_csr(CPUState *cs, uint8_t *mem_buf, int n)
     const unsigned regsz = riscv_cpu_is_32bit(cpu) ? 4 : 8;
 
     if (n < CSR_TABLE_SIZE) {
-        uint64_t val = ldn_p(mem_buf, regsz);
+        uint64_t val = ldn(env, mem_buf, regsz);
         int result;
 
         result = riscv_csrrw_debug(env, n, NULL, val, -1);
@@ -209,7 +211,7 @@ static int riscv_gdb_get_virtual(CPUState *cs, GByteArray *buf, int n)
 {
     if (n == 0) {
 #ifdef CONFIG_USER_ONLY
-        return gdb_get_regl(buf, 0);
+        return riscv_gdb_get_reg_mxl(cs, buf, 0);
 #else
         RISCVCPU *cpu = RISCV_CPU(cs);
         CPURISCVState *env = &cpu->env;
@@ -217,7 +219,7 @@ static int riscv_gdb_get_virtual(CPUState *cs, GByteArray *buf, int n)
         /* Per RiscV debug spec v1.0.0 rc4 */
         uint32_t vbit = (env->virt_enabled) ? BIT(2) : 0;
 
-        return gdb_get_regl(buf, env->priv | vbit);
+        return riscv_gdb_get_reg_mxl(cs, buf, env->priv | vbit);
 #endif
     }
     return 0;
@@ -230,8 +232,7 @@ static int riscv_gdb_set_virtual(CPUState *cs, uint8_t *mem_buf, int n)
         const unsigned regsz = riscv_cpu_is_32bit(cpu) ? 4 : 8;
 #ifndef CONFIG_USER_ONLY
         CPURISCVState *env = &cpu->env;
-
-        target_ulong new_priv = ldn_p(mem_buf, regsz) & 0x3;
+        privilege_mode_t new_priv = ldn(env, mem_buf, regsz) & 0x3;
         bool new_virt = 0;
 
         if (new_priv == PRV_RESERVED) {
@@ -239,7 +240,7 @@ static int riscv_gdb_set_virtual(CPUState *cs, uint8_t *mem_buf, int n)
         }
 
         if (new_priv != PRV_M) {
-            new_virt = (ldn_p(mem_buf, regsz) & BIT(2)) >> 2;
+            new_virt = (ldn(env, mem_buf, regsz) & BIT(2)) >> 2;
         }
 
         if (riscv_has_ext(env, RVH) && new_virt != env->virt_enabled) {
@@ -301,6 +302,7 @@ static GDBFeature *riscv_gen_dynamic_csr_feature(CPUState *cs, int base_reg)
 
     return &cpu->dyn_csr_feature;
 }
+#endif /* CONFIG_TCG */
 
 static GDBFeature *ricsv_gen_dynamic_vector_feature(CPUState *cs, int base_reg)
 {
@@ -343,7 +345,6 @@ static GDBFeature *ricsv_gen_dynamic_vector_feature(CPUState *cs, int base_reg)
 
 void riscv_cpu_register_gdb_regs_for_features(CPUState *cs)
 {
-    RISCVCPUClass *mcc = RISCV_CPU_GET_CLASS(cs);
     RISCVCPU *cpu = RISCV_CPU(cs);
     CPURISCVState *env = &cpu->env;
     if (env->misa_ext & RVD) {
@@ -358,6 +359,10 @@ void riscv_cpu_register_gdb_regs_for_features(CPUState *cs)
                                  riscv_gdb_set_vector,
                                  ricsv_gen_dynamic_vector_feature(cs, cs->gdb_num_regs));
     }
+
+#ifdef CONFIG_TCG
+    RISCVCPUClass *mcc = RISCV_CPU_GET_CLASS(cs);
+
     switch (mcc->def->misa_mxl_max) {
     case MXL_RV32:
         gdb_register_coprocessor(cs, riscv_gdb_get_virtual,
@@ -378,4 +383,5 @@ void riscv_cpu_register_gdb_regs_for_features(CPUState *cs)
         gdb_register_coprocessor(cs, riscv_gdb_get_csr, riscv_gdb_set_csr,
                                  riscv_gen_dynamic_csr_feature(cs, cs->gdb_num_regs));
     }
+#endif
 }

@@ -19,6 +19,7 @@
 
 #include "qemu/osdep.h"
 #include "cpu.h"
+#include "accel/tcg/cpu-loop.h"
 #include "exec/helper-proto.h"
 #include "exception.h"
 
@@ -26,7 +27,7 @@ void HELPER(exception)(CPUOpenRISCState *env, uint32_t excp)
 {
     OpenRISCCPU *cpu = env_archcpu(env);
 
-    raise_exception(cpu, excp);
+    or1k_raise_exception(cpu, excp);
 }
 
 static G_NORETURN

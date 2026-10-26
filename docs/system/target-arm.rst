@@ -87,15 +87,13 @@ Board-specific documentation
    arm/cubieboard
    arm/emcraft-sf2
    arm/exynos
-   arm/fby35
-   arm/musicpal
    arm/kzm
    arm/nrf
    arm/nuvoton
    arm/imx25-pdk
    arm/mcimx6ul-evk
    arm/mcimx7d-sabre
-   arm/imx8mp-evk
+   arm/imx8m
    arm/orangepi
    arm/raspi
    arm/collie

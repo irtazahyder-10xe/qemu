@@ -47,6 +47,7 @@ static void qemu_clipboard_change_state(void *opaque, bool running, RunState sta
     }
 
     if (cb_reset_serial_on_resume) {
+        cb_reset_serial_on_resume = false;
         qemu_clipboard_reset_serial();
     }
 
@@ -75,6 +76,10 @@ void qemu_clipboard_peer_unregister(QemuClipboardPeer *peer)
         qemu_clipboard_peer_release(peer, i);
     }
     notifier_remove(&peer->notifier);
+    if (QLIST_EMPTY(&clipboard_notifiers.notifiers)) {
+        g_clear_pointer(&cb_change_state_entry,
+                        qemu_del_vm_change_state_handler);
+    }
 }
 
 bool qemu_clipboard_peer_owns(QemuClipboardPeer *peer,

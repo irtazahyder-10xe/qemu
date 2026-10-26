@@ -485,12 +485,7 @@ void scsi_bus_legacy_handle_cmdline(SCSIBus *bus)
     Location loc;
     DriveInfo *dinfo;
     int unit;
-    BlockConf conf = {
-        .bootindex = -1,
-        .share_rw = false,
-        .rerror = BLOCKDEV_ON_ERROR_AUTO,
-        .werror = BLOCKDEV_ON_ERROR_AUTO,
-    };
+    BlockConf conf = DEFAULT_BLOCK_CONF;
 
     loc_push_none(&loc);
     for (unit = 0; unit <= bus->info->max_target; unit++) {
@@ -878,6 +873,16 @@ SCSIRequest *scsi_req_new(SCSIDevice *d, uint32_t tag, uint32_t lun,
           */
          !(buf[0] == REQUEST_SENSE && d->sense_is_ua))) {
         ops = &reqops_unit_attention;
+    } else if (buf[0] == PR_HELPER_CLEANUP) {
+        /*
+         * This is a QEMU-internal vendor-specific SCSI command that must only
+         * be submitted directly via blk_aio_ioctl() and not through SCSI
+         * emulation. Reject the command explicitly to guarantee a guest cannot
+         * execute it, although vendor-specific commands are not supported by
+         * SCSI emulation (including passthrough) anyway.
+         */
+        trace_scsi_req_parse_bad(d->id, lun, tag, buf[0]);
+        goto invalid_opcode;
     } else if (lun != d->lun ||
                buf[0] == REPORT_LUNS ||
                (buf[0] == REQUEST_SENSE && d->sense_len)) {
@@ -1518,6 +1523,13 @@ void scsi_req_unref(SCSIRequest *req)
     }
 }
 
+void scsi_req_unref_detach_hba(SCSIRequest *req)
+{
+    /* Unref when the HBA frees hba_private separately (e.g. virtio_scsi_free_req) */
+    req->hba_private = NULL;
+    scsi_req_unref(req);
+}
+
 /* Tell the device that we finished processing this chunk of I/O.  It
    will start the next chunk or complete the command.  */
 void scsi_req_continue(SCSIRequest *req)
@@ -1978,12 +1990,8 @@ const VMStateDescription vmstate_scsi_device = {
         VMSTATE_UINT32(sense_len, SCSIDevice),
         {
             .name         = "requests",
-            .version_id   = 0,
-            .field_exists = NULL,
-            .size         = 0,   /* ouch */
             .info         = &vmstate_info_scsi_requests,
-            .flags        = VMS_SINGLE,
-            .offset       = 0,
+            .flags        = VMS_SINGLE | VMS_NO_STATE,
         },
         VMSTATE_END_OF_LIST()
     },

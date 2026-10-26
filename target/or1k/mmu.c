@@ -24,6 +24,7 @@
 #include "exec/cputlb.h"
 #include "exec/page-protection.h"
 #include "exec/target_page.h"
+#include "accel/tcg/cpu-loop.h"
 #include "qemu/host-utils.h"
 #include "hw/core/loader.h"
 
@@ -138,7 +139,8 @@ bool openrisc_cpu_tlb_fill(CPUState *cs, vaddr addr, int size,
     cpu_loop_exit_restore(cs, retaddr);
 }
 
-hwaddr openrisc_cpu_get_phys_page_debug(CPUState *cs, vaddr addr)
+bool openrisc_cpu_translate_for_debug(CPUState *cs, vaddr addr,
+                                      TranslateForDebugResult *result)
 {
     OpenRISCCPU *cpu = OPENRISC_CPU(cs);
     int prot, excp, sr = cpu->env.sr;
@@ -151,12 +153,15 @@ hwaddr openrisc_cpu_get_phys_page_debug(CPUState *cs, vaddr addr)
                             PAGE_READ,
                             (sr & SR_SM) != 0);
         if (!excp) {
-            return phys_addr;
+            break;
         }
         excp = get_phys_mmu(cpu, &phys_addr, &prot, addr,
                             PAGE_EXEC,
                             (sr & SR_SM) != 0);
-        return excp ? -1 : phys_addr;
+        if (excp) {
+            return false;
+        }
+        break;
 
     default:
         /* The mmu is partially enabled, and we don't really have
@@ -166,13 +171,20 @@ hwaddr openrisc_cpu_get_phys_page_debug(CPUState *cs, vaddr addr)
                             PAGE_EXEC | PAGE_READ | PAGE_WRITE,
                             (sr & SR_SM) != 0);
         if (!excp) {
-            return phys_addr;
+            break;
         }
         /* fallthru */
 
     case 0:
         /* The mmu is definitely disabled; lookups never fail.  */
         get_phys_nommu(&phys_addr, &prot, addr);
-        return phys_addr;
+        break;
     }
+
+    *result = (TranslateForDebugResult) {
+        .physaddr = phys_addr,
+        .lg_page_size = TARGET_PAGE_BITS,
+        .attrs.debug = 1,
+    };
+    return true;
 }

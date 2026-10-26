@@ -22,7 +22,6 @@
 
 #include "cpu-qom.h"
 #include "exec/cpu-common.h"
-#include "exec/cpu-defs.h"
 #include "exec/cpu-interrupt.h"
 #include "fpu/softfloat-types.h"
 
@@ -155,6 +154,8 @@ enum {
     EXCP_TRAP     = 0xe,
     EXCP_NR,
 };
+
+const char *openrisc_excp_name(int excp);
 
 /* Supervisor register */
 enum {
@@ -297,7 +298,8 @@ void openrisc_translate_code(CPUState *cs, TranslationBlock *tb,
 int print_insn_or1k(bfd_vma addr, disassemble_info *info);
 
 #ifndef CONFIG_USER_ONLY
-hwaddr openrisc_cpu_get_phys_page_debug(CPUState *cpu, vaddr addr);
+bool openrisc_cpu_translate_for_debug(CPUState *cpu, vaddr addr,
+                                      TranslateForDebugResult *result);
 
 bool openrisc_cpu_tlb_fill(CPUState *cs, vaddr address, int size,
                            MMUAccessType access_type, int mmu_idx,

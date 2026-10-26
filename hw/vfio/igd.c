@@ -16,7 +16,6 @@
 #include "qapi/error.h"
 #include "qapi/qmp/qerror.h"
 #include "hw/core/boards.h"
-#include "hw/core/hw-error.h"
 #include "hw/nvram/fw_cfg.h"
 #include "pci.h"
 #include "pci-quirks.h"
@@ -97,6 +96,8 @@ static int igd_gen(VFIOPCIDevice *vdev)
     case 0x4C00:    /* Rocket Lake */
     case 0x4600:    /* Alder Lake */
     case 0xA700:    /* Raptor Lake */
+    case 0x7D00:    /* Meteor Lake / Arrow Lake */
+    case 0xB600:    /* Arrow Lake */
         return 12;
     }
 
@@ -453,12 +454,124 @@ static bool vfio_pci_igd_override_gms(int gen, uint32_t gms, uint32_t *gmch)
     return ret;
 }
 
-#define IGD_GGC_MMIO_OFFSET     0x108040
-#define IGD_BDSM_MMIO_OFFSET    0x1080C0
+#define IGD_GGC_MMIO_OFFSET         0x108040
+#define IGD_BDSM_MMIO_OFFSET        0x1080C0
+#define IGD_MTL_PCODE_STOLEN_ACCESS 0x138914
+
+#define IGD_IS_MTL_OR_ARL(vdev) \
+    ((((vdev)->device_id & 0xff00) == 0x7d00) || \
+     (((vdev)->device_id & 0xff00) == 0xb600))
+
+static uint64_t vfio_igd_pcode_stolen_access_read(void *opaque, hwaddr addr,
+                                                  unsigned size)
+{
+    return 0;
+}
+
+static void vfio_igd_pcode_stolen_access_write(void *opaque, hwaddr addr,
+                                               uint64_t data, unsigned size)
+{
+}
+
+static const MemoryRegionOps vfio_igd_pcode_stolen_access_quirk = {
+    .read = vfio_igd_pcode_stolen_access_read,
+    .write = vfio_igd_pcode_stolen_access_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+};
+
+/*
+ * IGD BAR0 DBUF_CTL sanitize quirk.
+ *
+ * On hosts where the firmware POST modeset left the display engine powered,
+ * DBUF_CTL reads back POWER_STATE=1 while POWER_REQUEST=0 -- an inconsistent
+ * leftover that never occurs under GVT-g (which emulates the register so
+ * STATE follows REQUEST).  A passed-through guest driver samples POWER_STATE
+ * to decide which DBUF slices are already enabled, sees this stale "powered"
+ * bit, and therefore never issues POWER_REQUEST.  DBUF then powers down, the
+ * plane FIFO underruns, and scanout is corrupted until a full modeset (e.g.
+ * a display sleep/wake) re-requests power.
+ *
+ * Present a consistent view like GVT-g: intercept DBUF_CTL reads and clear
+ * POWER_STATE whenever POWER_REQUEST is not set.  Writes pass straight
+ * through to the device.
+ */
+#define IGD_DBUF_POWER_REQUEST  (1u << 31)
+#define IGD_DBUF_POWER_STATE    (1u << 30)
+
+/*
+ * DBUF_CTL slice registers within BAR0, in slice order (i915 numbers these
+ * S1..S4).  How many slices exist is generation-dependent, so only the first
+ * igd_dbuf_ctl_nslices(gen) entries are real DBUF_CTL registers on a given
+ * part; the rest are unrelated registers and must not be trapped.
+ */
+static const uint32_t igd_dbuf_ctl_offsets[] = {
+    0x45008, /* S1 */ 0x44FE8, /* S2 */ 0x44300, /* S3 */ 0x44304, /* S4 */
+};
+
+/*
+ * DBUF slice count by generation, matching i915 dbuf.slice_mask:
+ * gen9/10 = 1 (S1), gen11 = 2 (S1-S2), gen12+ = 4 (S1-S4).
+ *
+ * Within gen12 the slice count is actually per-platform, not per-gen: ADL-P /
+ * RPL-P / DG2 expose 4 slices, but TGL / RKL / ADL-S have only 2.  We return 4
+ * for all gen12+ (igd_gen() can't distinguish them), so on a <4-slice gen12
+ * part S3/S4 (0x44300/0x44304) are over-trapped.  This is harmless in practice:
+ * the read handler only mutates a value when POWER_REQUEST=0 && POWER_STATE=1,
+ * which whatever register lives at those offsets is very unlikely to present.
+ * A fully-correct count would have to key off the PCI device ID.
+ */
+static int igd_dbuf_ctl_nslices(int gen)
+{
+    if (gen <= 10) {
+        return 1;
+    }
+    if (gen == 11) {
+        return 2;
+    }
+    return 4;
+}
+
+typedef struct IGDDbufCtlQuirk {
+    VFIOPCIDevice *vdev;
+    uint32_t bar_offset;    /* offset within BAR0 MMIO */
+    uint8_t bar;
+} IGDDbufCtlQuirk;
+
+static uint64_t igd_dbuf_ctl_read(void *opaque, hwaddr addr, unsigned size)
+{
+    IGDDbufCtlQuirk *q = opaque;
+    VFIOPCIDevice *vdev = q->vdev;
+    uint64_t val = vfio_region_read(&vdev->bars[q->bar].region,
+                                    addr + q->bar_offset, size);
+
+    if (size == 4 && !(val & IGD_DBUF_POWER_REQUEST) &&
+        (val & IGD_DBUF_POWER_STATE)) {
+        val &= ~(uint64_t)IGD_DBUF_POWER_STATE;
+        error_report_once("IGD quirk: DBUF_CTL@0x%x cleared stale "
+                          "POWER_STATE (POWER_REQUEST=0)", q->bar_offset);
+    }
+    return val;
+}
+
+static void igd_dbuf_ctl_write(void *opaque, hwaddr addr,
+                               uint64_t data, unsigned size)
+{
+    IGDDbufCtlQuirk *q = opaque;
+    VFIOPCIDevice *vdev = q->vdev;
+
+    vfio_region_write(&vdev->bars[q->bar].region,
+                      addr + q->bar_offset, data, size);
+}
+
+static const MemoryRegionOps igd_dbuf_ctl_ops = {
+    .read = igd_dbuf_ctl_read,
+    .write = igd_dbuf_ctl_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+};
 
 void vfio_probe_igd_bar0_quirk(VFIOPCIDevice *vdev, int nr)
 {
-    VFIOQuirk *ggc_quirk, *bdsm_quirk;
+    VFIOQuirk *ggc_quirk, *bdsm_quirk, *pcode_stolen_access_quirk;
     VFIOConfigMirrorQuirk *ggc_mirror, *bdsm_mirror;
     int gen;
 
@@ -471,6 +584,25 @@ void vfio_probe_igd_bar0_quirk(VFIOPCIDevice *vdev, int nr)
     gen = igd_gen(vdev);
     if (gen < 6) {
         return;
+    }
+
+    /*
+     * MTL/ARL guests must keep using the BAR-based framebuffer address.
+     * Return 0 for PCODE stolen memory access detection (0x138914) so GOP
+     * stays on the standard access path in the VM.
+     */
+    if (IGD_IS_MTL_OR_ARL(vdev)) {
+        pcode_stolen_access_quirk = vfio_quirk_alloc(1);
+        memory_region_init_io(pcode_stolen_access_quirk->mem, OBJECT(vdev),
+                              &vfio_igd_pcode_stolen_access_quirk, vdev,
+                              "vfio-igd-pcode-stolen-access-quirk", 4);
+        memory_region_add_subregion_overlap(vdev->bars[nr].region.mem,
+                                            IGD_MTL_PCODE_STOLEN_ACCESS,
+                                            pcode_stolen_access_quirk->mem,
+                                            1);
+
+        QLIST_INSERT_HEAD(&vdev->bars[nr].quirks,
+                          pcode_stolen_access_quirk, next);
     }
 
     if (vdev->igd_gms) {
@@ -508,6 +640,35 @@ void vfio_probe_igd_bar0_quirk(VFIOPCIDevice *vdev, int nr)
                                         1);
 
     QLIST_INSERT_HEAD(&vdev->bars[nr].quirks, bdsm_quirk, next);
+
+    /*
+     * DBUF_CTL sanitize quirk (gen9+): trap the DBUF_CTL slice registers so
+     * POWER_STATE is reported consistently with POWER_REQUEST (see
+     * igd_dbuf_ctl_read()).  Only trap slices that actually exist on this
+     * generation -- the remaining offsets are unrelated registers.
+     */
+    if (gen >= 9) {
+        int i, nslices = igd_dbuf_ctl_nslices(gen);
+        VFIOQuirk *dbuf_quirk = vfio_quirk_alloc(nslices);
+        IGDDbufCtlQuirk *dq;
+
+        dq = g_new0(IGDDbufCtlQuirk, nslices);
+        dbuf_quirk->data = dq;
+
+        for (i = 0; i < nslices; i++) {
+            dq[i].vdev = vdev;
+            dq[i].bar = nr;
+            dq[i].bar_offset = igd_dbuf_ctl_offsets[i];
+            memory_region_init_io(&dbuf_quirk->mem[i], OBJECT(vdev),
+                                  &igd_dbuf_ctl_ops, &dq[i],
+                                  "vfio-igd-dbuf-ctl-quirk", 4);
+            memory_region_add_subregion_overlap(vdev->bars[nr].region.mem,
+                                                igd_dbuf_ctl_offsets[i],
+                                                &dbuf_quirk->mem[i], 1);
+        }
+
+        QLIST_INSERT_HEAD(&vdev->bars[nr].quirks, dbuf_quirk, next);
+    }
 }
 
 static bool vfio_pci_igd_config_quirk(VFIOPCIDevice *vdev, Error **errp)
@@ -724,4 +885,119 @@ bool vfio_probe_igd_config_quirk(VFIOPCIDevice *vdev, Error **errp)
     }
 
     return vfio_pci_igd_config_quirk(vdev, errp);
+}
+
+/*
+ * IGD ROM BAR read from kernel is actually the host VBIOS shadow RAM region,
+ * which contains host modifications. In Gen 6-9 VBIOS, the routine below is
+ * used to get BDSM value when programming the initial GTT.
+ *   xx xx xx xx           v: .long ?                  # saved value
+ *   66 53                    push  %ebx
+ *   66 2e 83 3e xx xx 00     cmpl  $0x0,%cs:v         # is saved value empty?
+ *   74 07                    je    1f                 # if zero, go compute
+ *   66 2e a1 xx xx           mov   %cs:v,%eax         # else return saved value
+ *   eb 0f                    jmp   2f
+ *   b8 5e 10              1: mov   $0x105e,%ax        # dev 00:02.0, offset 5E
+ *   e8 xx xx                 call  pci_read_cfg_word
+ *   66 c1 e0 10              shl   $0x10,%eax         # left shift 16 bits
+ *   66 2e a3 xx xx           mov   %eax,%cs:v         # save the result
+ *   66 5b                 2: pop   %ebx
+ *   c3                       ret
+ * When running the VBIOS in guest, saved value still reflects the host stolen
+ * memory base address, which is not correct in guest. So we need to patch the
+ * VBIOS to clear the saved value.
+ *
+ * The unique 19-byte starts at `cmpl $0,%cs:v` and ends at `mov $0x105e,%ax`
+ * anchors the match to the routine. Both `cs:` displacements must reference
+ * the same offset.
+ */
+static int igd_vbios_find_saved_bdsm(const uint8_t *rom, size_t rom_size,
+                                     uint16_t *bdsm_offset)
+{
+    static const uint8_t start[] = { 0x66, 0x2e, 0x83, 0x3e };
+    static const uint8_t middle[] = { 0x00, 0x74, 0x07, 0x66, 0x2e, 0xa1 };
+    static const uint8_t end[] = { 0xeb, 0x0f, 0xb8, 0x5e, 0x10 };
+    uint16_t val;
+    size_t i;
+    bool found = false;
+
+    if (rom_size < 19) {
+        return -ENOENT;
+    }
+
+    for (i = 0; i + 19 <= rom_size; i++) {
+        if (memcmp(rom + i, start, sizeof(start)) != 0 ||
+            memcmp(rom + i + 6, middle, sizeof(middle)) != 0 ||
+            memcmp(rom + i + 14, end, sizeof(end)) != 0) {
+            continue;
+        }
+
+        /* same saved value address? */
+        if (rom[i + 4] != rom[i + 12] || rom[i + 5] != rom[i + 13]) {
+            continue;
+        }
+
+        if (found) {
+            return -EEXIST;
+        }
+
+        val = rom[i + 4] | ((uint16_t)rom[i + 5] << 8);
+        if (val + sizeof(uint32_t) <= rom_size) {
+            *bdsm_offset = val;
+            found = true;
+        }
+    }
+
+    if (!found) {
+        return -ENOENT;
+    }
+
+    return 0;
+}
+
+void vfio_igd_legacy_rom_quirk(VFIOPCIDevice *vdev)
+{
+    uint8_t *rom = vdev->rom;
+    int gen;
+    uint16_t pcir_offset;
+    uint16_t bdsm_offset = 0;
+    uint8_t checksum = 0;
+    uint32_t i;
+
+    if (!vfio_pci_is(vdev, PCI_VENDOR_ID_INTEL, PCI_ANY_ID) ||
+        !vfio_is_vga(vdev) || !vdev->vga) {
+        return;
+    }
+
+    /* Only Gen 6~9 devices have legacy VBIOS as Option ROM */
+    gen = igd_gen(vdev);
+    if (gen < 6 || gen > 9) {
+        return;
+    }
+
+    if (pci_get_word(rom) != 0xaa55) {
+        return;
+    }
+
+    /* Must be a legacy ROM */
+    pcir_offset = pci_get_word(rom + 0x18);
+    if (pcir_offset + 0x14 >= vdev->rom_size ||
+        memcmp(rom + pcir_offset, "PCIR", 4) ||
+        pci_get_byte(rom + pcir_offset + 0x14) != 0x00) {
+        return;
+    }
+
+    /* Search and clear the saved BDSM value */
+    if (igd_vbios_find_saved_bdsm(rom, vdev->rom_size, &bdsm_offset)) {
+        return;
+    }
+    memset(rom + bdsm_offset, 0, sizeof(uint32_t));
+
+    /* Recalculate checksum and patch it. */
+    for (i = 0; i < vdev->rom_size; i++) {
+        checksum += rom[i];
+    }
+    rom[6] -= checksum;
+
+    trace_vfio_pci_igd_vbios_patched(vdev->vbasedev.name);
 }

@@ -778,6 +778,14 @@ DO_ZPZZ_PAIR_FP(sve2_fminp_zpzz_h, float16, H1_2, float16_min)
 DO_ZPZZ_PAIR_FP(sve2_fminp_zpzz_s, float32, H1_4, float32_min)
 DO_ZPZZ_PAIR_FP(sve2_fminp_zpzz_d, float64, H1_8, float64_min)
 
+DO_ZPZZ_PAIR_FP(sve2_ah_fmaxp_zpzz_h, float16, H1_2, HELPER(vfp_ah_maxh))
+DO_ZPZZ_PAIR_FP(sve2_ah_fmaxp_zpzz_s, float32, H1_4, HELPER(vfp_ah_maxs))
+DO_ZPZZ_PAIR_FP(sve2_ah_fmaxp_zpzz_d, float64, H1_8, HELPER(vfp_ah_maxd))
+
+DO_ZPZZ_PAIR_FP(sve2_ah_fminp_zpzz_h, float16, H1_2, HELPER(vfp_ah_minh))
+DO_ZPZZ_PAIR_FP(sve2_ah_fminp_zpzz_s, float32, H1_4, HELPER(vfp_ah_mins))
+DO_ZPZZ_PAIR_FP(sve2_ah_fminp_zpzz_d, float64, H1_8, HELPER(vfp_ah_mind))
+
 #undef DO_ZPZZ_PAIR_FP
 
 /* Three-operand expander, controlled by a predicate, in which the
@@ -815,18 +823,20 @@ DO_ZPZW(sve_lsl_zpzw_s, uint32_t, uint64_t, H1_4, DO_LSL)
 
 #undef DO_ZPZW
 
-/* Fully general two-operand expander, controlled by a predicate.
- */
+/* Fully general two-operand expander, controlled by a predicate.  */
 #define DO_ZPZ(NAME, TYPE, H, OP)                               \
 void HELPER(NAME)(void *vd, void *vn, void *vg, uint32_t desc)  \
 {                                                               \
     intptr_t i, opr_sz = simd_oprsz(desc);                      \
+    bool zeroing = simd_data(desc) & 1;                         \
     for (i = 0; i < opr_sz; ) {                                 \
         uint16_t pg = *(uint16_t *)(vg + H1_2(i >> 3));         \
         do {                                                    \
             if (pg & 1) {                                       \
                 TYPE nn = *(TYPE *)(vn + H(i));                 \
                 *(TYPE *)(vd + H(i)) = OP(nn);                  \
+            } else if (zeroing) {                               \
+                *(TYPE *)(vd + H(i)) = 0;                       \
             }                                                   \
             i += sizeof(TYPE), pg >>= sizeof(TYPE);             \
         } while (i & 15);                                       \
@@ -838,12 +848,15 @@ void HELPER(NAME)(void *vd, void *vn, void *vg, uint32_t desc)  \
 void HELPER(NAME)(void *vd, void *vn, void *vg, uint32_t desc)  \
 {                                                               \
     intptr_t i, opr_sz = simd_oprsz(desc) / 8;                  \
+    bool zeroing = simd_data(desc) & 1;                         \
     TYPE *d = vd, *n = vn;                                      \
     uint8_t *pg = vg;                                           \
     for (i = 0; i < opr_sz; i += 1) {                           \
         if (pg[H1(i)] & 1) {                                    \
             TYPE nn = n[i];                                     \
             d[i] = OP(nn);                                      \
+        } else if (zeroing) {                                   \
+            d[i] = 0;                                           \
         }                                                       \
     }                                                           \
 }
@@ -904,12 +917,45 @@ DO_ZPZ(sve_ah_fneg_h, uint16_t, H1_2, DO_AH_FNEG_H)
 DO_ZPZ(sve_ah_fneg_s, uint32_t, H1_4, DO_AH_FNEG_S)
 DO_ZPZ_D(sve_ah_fneg_d, uint64_t, DO_AH_FNEG_D)
 
-#define DO_NOT(N)    (~N)
+static inline void
+sve_not_zpz(uint64_t *d, uint64_t *n, uint8_t *pg, uint32_t desc,
+            uint64_t (*expand)(uint8_t))
+{
+    intptr_t opr_sz = simd_oprsz(desc) / 8;
+    bool zeroing = simd_data(desc) & 1;
 
-DO_ZPZ(sve_not_zpz_b, uint8_t, H1, DO_NOT)
-DO_ZPZ(sve_not_zpz_h, uint16_t, H1_2, DO_NOT)
-DO_ZPZ(sve_not_zpz_s, uint32_t, H1_4, DO_NOT)
-DO_ZPZ_D(sve_not_zpz_d, uint64_t, DO_NOT)
+    if (zeroing) {
+        for (intptr_t i = 0; i < opr_sz; ++i) {
+            uint64_t p = expand(pg[H1(i)]);
+            d[i] = ~n[i] & p;
+        }
+    } else {
+        for (intptr_t i = 0; i < opr_sz; ++i) {
+            uint64_t p = expand(pg[H1(i)]);
+            d[i] = (~n[i] & p) | (d[i] & ~p);
+        }
+    }
+}
+
+void HELPER(sve_not_zpz_b)(void *vd, void *vn, void *pg, uint32_t desc)
+{
+    sve_not_zpz(vd, vn, pg, desc, expand_pred_b);
+}
+
+void HELPER(sve_not_zpz_h)(void *vd, void *vn, void *pg, uint32_t desc)
+{
+    sve_not_zpz(vd, vn, pg, desc, expand_pred_h);
+}
+
+void HELPER(sve_not_zpz_s)(void *vd, void *vn, void *pg, uint32_t desc)
+{
+    sve_not_zpz(vd, vn, pg, desc, expand_pred_s);
+}
+
+void HELPER(sve_not_zpz_d)(void *vd, void *vn, void *pg, uint32_t desc)
+{
+    sve_not_zpz(vd, vn, pg, desc, expand_pred_d);
+}
 
 #define DO_SXTB(N)    ((int8_t)N)
 #define DO_SXTH(N)    ((int16_t)N)
@@ -958,6 +1004,7 @@ DO_ZPZ_D(sve_revw_d, uint64_t, wswap64)
 void HELPER(sme_revd_q)(void *vd, void *vn, void *vg, uint32_t desc)
 {
     intptr_t i, opr_sz = simd_oprsz(desc) / 8;
+    bool zeroing = simd_data(desc) & 1;
     uint64_t *d = vd, *n = vn;
     uint8_t *pg = vg;
 
@@ -967,6 +1014,9 @@ void HELPER(sme_revd_q)(void *vd, void *vn, void *vg, uint32_t desc)
             uint64_t n1 = n[i + 1];
             d[i + 0] = n1;
             d[i + 1] = n0;
+        } else if (zeroing) {
+            d[i + 0] = 0;
+            d[i + 1] = 0;
         }
     }
 }
@@ -994,8 +1044,8 @@ DO_ZPZ(sve2_sqneg_h, uint16_t, H1_2, DO_SQNEG)
 DO_ZPZ(sve2_sqneg_s, uint32_t, H1_4, DO_SQNEG)
 DO_ZPZ_D(sve2_sqneg_d, uint64_t, DO_SQNEG)
 
-DO_ZPZ(sve2_urecpe_s, uint32_t, H1_4, helper_recpe_u32)
-DO_ZPZ(sve2_ursqrte_s, uint32_t, H1_4, helper_rsqrte_u32)
+DO_ZPZ(sve2_urecpe_s, uint32_t, H1_4, HELPER(recpe_u32))
+DO_ZPZ(sve2_ursqrte_s, uint32_t, H1_4, HELPER(rsqrte_u32))
 
 /* Three-operand expander, unpredicated, in which the third operand is "wide".
  */
@@ -3571,25 +3621,25 @@ static void do_perseg_zzz(void *vd, void *vn, void *vm,
     void HELPER(NAME)(void *vd, void *vn, void *vm, uint32_t desc) \
     { do_perseg_zzz(vd, vn, vm, desc, FUNC); }
 
-DO_PERSEG_ZZZ(sve2p1_uzpq_b, helper_sve_uzp_b)
-DO_PERSEG_ZZZ(sve2p1_uzpq_h, helper_sve_uzp_h)
-DO_PERSEG_ZZZ(sve2p1_uzpq_s, helper_sve_uzp_s)
-DO_PERSEG_ZZZ(sve2p1_uzpq_d, helper_sve_uzp_d)
+DO_PERSEG_ZZZ(sve2p1_uzpq_b, HELPER(sve_uzp_b))
+DO_PERSEG_ZZZ(sve2p1_uzpq_h, HELPER(sve_uzp_h))
+DO_PERSEG_ZZZ(sve2p1_uzpq_s, HELPER(sve_uzp_s))
+DO_PERSEG_ZZZ(sve2p1_uzpq_d, HELPER(sve_uzp_d))
 
-DO_PERSEG_ZZZ(sve2p1_zipq_b, helper_sve_zip_b)
-DO_PERSEG_ZZZ(sve2p1_zipq_h, helper_sve_zip_h)
-DO_PERSEG_ZZZ(sve2p1_zipq_s, helper_sve_zip_s)
-DO_PERSEG_ZZZ(sve2p1_zipq_d, helper_sve_zip_d)
+DO_PERSEG_ZZZ(sve2p1_zipq_b, HELPER(sve_zip_b))
+DO_PERSEG_ZZZ(sve2p1_zipq_h, HELPER(sve_zip_h))
+DO_PERSEG_ZZZ(sve2p1_zipq_s, HELPER(sve_zip_s))
+DO_PERSEG_ZZZ(sve2p1_zipq_d, HELPER(sve_zip_d))
 
-DO_PERSEG_ZZZ(sve2p1_tblq_b, helper_sve_tbl_b)
-DO_PERSEG_ZZZ(sve2p1_tblq_h, helper_sve_tbl_h)
-DO_PERSEG_ZZZ(sve2p1_tblq_s, helper_sve_tbl_s)
-DO_PERSEG_ZZZ(sve2p1_tblq_d, helper_sve_tbl_d)
+DO_PERSEG_ZZZ(sve2p1_tblq_b, HELPER(sve_tbl_b))
+DO_PERSEG_ZZZ(sve2p1_tblq_h, HELPER(sve_tbl_h))
+DO_PERSEG_ZZZ(sve2p1_tblq_s, HELPER(sve_tbl_s))
+DO_PERSEG_ZZZ(sve2p1_tblq_d, HELPER(sve_tbl_d))
 
-DO_PERSEG_ZZZ(sve2p1_tbxq_b, helper_sve2_tbx_b)
-DO_PERSEG_ZZZ(sve2p1_tbxq_h, helper_sve2_tbx_h)
-DO_PERSEG_ZZZ(sve2p1_tbxq_s, helper_sve2_tbx_s)
-DO_PERSEG_ZZZ(sve2p1_tbxq_d, helper_sve2_tbx_d)
+DO_PERSEG_ZZZ(sve2p1_tbxq_b, HELPER(sve2_tbx_b))
+DO_PERSEG_ZZZ(sve2p1_tbxq_h, HELPER(sve2_tbx_h))
+DO_PERSEG_ZZZ(sve2p1_tbxq_s, HELPER(sve2_tbx_s))
+DO_PERSEG_ZZZ(sve2p1_tbxq_d, HELPER(sve2_tbx_d))
 
 #undef DO_PERSEG_ZZZ
 
@@ -3620,40 +3670,59 @@ DO_TRN(sve2_trn_q, Int128, )
 #undef DO_UZP
 #undef DO_TRN
 
-void HELPER(sve_compact_s)(void *vd, void *vn, void *vg, uint32_t desc)
-{
-    intptr_t i, j, opr_sz = simd_oprsz(desc) / 4;
-    uint32_t *d = vd, *n = vn;
-    uint8_t *pg = vg;
-
-    for (i = j = 0; i < opr_sz; i++) {
-        if (pg[H1(i / 2)] & (i & 1 ? 0x10 : 0x01)) {
-            d[H4(j)] = n[H4(i)];
-            j++;
-        }
-    }
-    for (; j < opr_sz; j++) {
-        d[H4(j)] = 0;
-    }
+#define DO_COMPACT(NAME, TYPE, H)                                     \
+void HELPER(NAME)(void *vd, void *vn, void *vg, uint32_t desc)        \
+{                                                                     \
+    intptr_t j = 0, oprsz = simd_oprsz(desc);                         \
+    for (intptr_t i = 0; i < oprsz; ) {                               \
+        uint16_t pg = *(uint16_t *)(vg + H1_2(i >> 3));               \
+        do {                                                          \
+            if (pg & 1) {                                             \
+                *(TYPE *)(vd + H(j)) = *(TYPE *)(vn + H(i));          \
+                j += sizeof(TYPE);                                    \
+            }                                                         \
+            i += sizeof(TYPE);                                        \
+            pg >>= sizeof(TYPE);                                      \
+        } while (i & 15);                                             \
+    }                                                                 \
+    for (; j < oprsz; j += sizeof(TYPE)) {                            \
+        *(TYPE *)(vd + H(j)) = 0;                                     \
+    }                                                                 \
 }
 
-void HELPER(sve_compact_d)(void *vd, void *vn, void *vg, uint32_t desc)
-{
-    intptr_t i, j, opr_sz = simd_oprsz(desc) / 8;
-    uint64_t *d = vd, *n = vn;
-    uint8_t *pg = vg;
+DO_COMPACT(sve_compact_b, uint8_t, H1)
+DO_COMPACT(sve_compact_h, uint16_t, H1_2)
+DO_COMPACT(sve_compact_s, uint32_t, H1_4)
+DO_COMPACT(sve_compact_d, uint64_t, H1_8)
 
-    for (i = j = 0; i < opr_sz; i++) {
-        if (pg[H1(i)] & 1) {
-            d[j] = n[i];
-            j++;
-        }
-    }
-    for (; j < opr_sz; j++) {
-        d[j] = 0;
-    }
+#undef DO_COMPACT
+
+#define DO_EXPAND(NAME, TYPE, H)                                      \
+void HELPER(NAME)(void *vd, void *vn, void *vg, uint32_t desc)        \
+{                                                                     \
+    intptr_t oprsz = simd_oprsz(desc);                                \
+    ARMVectorReg tmp_n = *(ARMVectorReg *)vn;                         \
+    for (intptr_t i = 0, j = 0; i < oprsz; ) {                        \
+        uint16_t pg = *(uint16_t *)(vg + H1_2(i >> 3));               \
+        do {                                                          \
+            TYPE nn = 0;                                              \
+            if (pg & 1) {                                             \
+                nn = *(TYPE *)((void *)&tmp_n + H(j));                \
+                j += sizeof(TYPE);                                    \
+            }                                                         \
+            *(TYPE *)(vd + H(i)) = nn;                                \
+            i += sizeof(TYPE);                                        \
+            pg >>= sizeof(TYPE);                                      \
+        } while (i & 15);                                             \
+    }                                                                 \
 }
 
+DO_EXPAND(sve_expand_b, uint8_t, H1)
+DO_EXPAND(sve_expand_h, uint16_t, H1_2)
+DO_EXPAND(sve_expand_s, uint32_t, H1_4)
+DO_EXPAND(sve_expand_d, uint64_t, H1_8)
+
+#undef DO_EXPAND
 /* Similar to the ARM LastActiveElement pseudocode function, except the
  * result is multiplied by the element size.  This includes the not found
  * indication; e.g. not found for esz=3 is -8.
@@ -4292,6 +4361,36 @@ uint64_t HELPER(sve2p1_cntp_c)(uint32_t png, uint32_t desc)
     return count >> p.lg2_stride;
 }
 
+uint64_t HELPER(sve_firstp)(void *vn, void *vg, uint32_t pred_desc)
+{
+    intptr_t words = DIV_ROUND_UP(FIELD_EX32(pred_desc, PREDDESC, OPRSZ), 8);
+    intptr_t esz = FIELD_EX32(pred_desc, PREDDESC, ESZ);
+    uint64_t *n = vn, *g = vg, mask = pred_esz_masks[esz];
+
+    for (intptr_t i = 0; i < words; ++i) {
+        uint64_t t = n[i] & g[i] & mask;
+        if (t) {
+            return (i * 64 + ctz64(t)) >> esz;
+        }
+    }
+    return -1;
+}
+
+uint64_t HELPER(sve_lastp)(void *vn, void *vg, uint32_t pred_desc)
+{
+    intptr_t words = DIV_ROUND_UP(FIELD_EX32(pred_desc, PREDDESC, OPRSZ), 8);
+    intptr_t esz = FIELD_EX32(pred_desc, PREDDESC, ESZ);
+    uint64_t *n = vn, *g = vg, mask = pred_esz_masks[esz];
+
+    for (intptr_t i = words - 1; i >= 0; --i) {
+        uint64_t t = n[i] & g[i] & mask;
+        if (t) {
+            return (i * 64 + (63 - clz64(t))) >> esz;
+        }
+    }
+    return -1;
+}
+
 /* C.f. Arm pseudocode EncodePredCount */
 static uint64_t encode_pred_count(uint32_t elements, uint32_t count,
                                   uint32_t esz, bool invert)
@@ -4476,18 +4575,19 @@ uint32_t HELPER(sve_whilecg)(void *vd, uint32_t count, uint32_t pred_desc)
  * little to gain with a more complex non-recursive form.
  */
 #define DO_REDUCE(NAME, SUF, TYPE, H, FUNC, IDENT)                      \
-static TYPE FUNC##_reduce(TYPE *data, float_status *status, uintptr_t n) \
+static TYPE NAME##_##SUF##_reduce(TYPE *data, float_status *status,   \
+                                  uintptr_t n)                        \
 {                                                                     \
     if (n == 1) {                                                     \
         return *data;                                                 \
     } else {                                                          \
         uintptr_t half = n / 2;                                       \
-        TYPE lo = FUNC##_reduce(data, status, half);                  \
-        TYPE hi = FUNC##_reduce(data + half, status, half);           \
+        TYPE lo = NAME##_##SUF##_reduce(data, status, half);          \
+        TYPE hi = NAME##_##SUF##_reduce(data + half, status, half);   \
         return FUNC(lo, hi, status);                                  \
     }                                                                 \
 }                                                                     \
-uint64_t helper_sve_##NAME##v_##SUF(void *vn, void *vg,               \
+uint64_t HELPER(sve_##NAME##v_##SUF)(void *vn, void *vg,              \
                                     float_status *status, uint32_t desc) \
 {                                                                     \
     uintptr_t i, oprsz = simd_oprsz(desc), maxsz = simd_data(desc);   \
@@ -4504,9 +4604,9 @@ uint64_t helper_sve_##NAME##v_##SUF(void *vn, void *vg,               \
     for (; i < maxsz; i += sizeof(TYPE)) {                            \
         *(TYPE *)((void *)data + i) = ident;                          \
     }                                                                 \
-    return FUNC##_reduce(data, status, maxsz / sizeof(TYPE));         \
+    return NAME##_##SUF##_reduce(data, status, maxsz / sizeof(TYPE)); \
 }                                                                     \
-void helper_sve2p1_##NAME##qv_##SUF(void *vd, void *vn, void *vg,     \
+void HELPER(sve2p1_##NAME##qv_##SUF)(void *vd, void *vn, void *vg,    \
                                     float_status *status, uint32_t desc) \
 {                                                                     \
     unsigned oprsz = simd_oprsz(desc), segments = oprsz / 16;         \
@@ -4518,7 +4618,7 @@ void helper_sve2p1_##NAME##qv_##SUF(void *vd, void *vn, void *vg,     \
             TYPE nn = *(TYPE *)(vn + (s * 16 + H(e)));                \
             data[s] = (pg >> e) & 1 ? nn : ident;                     \
         }                                                             \
-        *(TYPE *)(vd + H(e)) = FUNC##_reduce(data, status, segments); \
+        *(TYPE *)(vd + H(e)) = NAME##_##SUF##_reduce(data, status, segments); \
     }                                                                 \
     clear_tail(vd, 16, simd_maxsz(desc));                             \
 }
@@ -4547,15 +4647,15 @@ DO_REDUCE(fmax,h, float16, H1_2, float16_max, float16_chs(float16_infinity))
 DO_REDUCE(fmax,s, float32, H1_4, float32_max, float32_chs(float32_infinity))
 DO_REDUCE(fmax,d, float64, H1_8, float64_max, float64_chs(float64_infinity))
 
-DO_REDUCE(ah_fmin,h, float16, H1_2, helper_vfp_ah_minh, float16_infinity)
-DO_REDUCE(ah_fmin,s, float32, H1_4, helper_vfp_ah_mins, float32_infinity)
-DO_REDUCE(ah_fmin,d, float64, H1_8, helper_vfp_ah_mind, float64_infinity)
+DO_REDUCE(ah_fmin, h, float16, H1_2, HELPER(vfp_ah_minh), float16_infinity)
+DO_REDUCE(ah_fmin, s, float32, H1_4, HELPER(vfp_ah_mins), float32_infinity)
+DO_REDUCE(ah_fmin, d, float64, H1_8, HELPER(vfp_ah_mind), float64_infinity)
 
-DO_REDUCE(ah_fmax,h, float16, H1_2, helper_vfp_ah_maxh,
+DO_REDUCE(ah_fmax, h, float16, H1_2, HELPER(vfp_ah_maxh),
           float16_chs(float16_infinity))
-DO_REDUCE(ah_fmax,s, float32, H1_4, helper_vfp_ah_maxs,
+DO_REDUCE(ah_fmax, s, float32, H1_4, HELPER(vfp_ah_maxs),
           float32_chs(float32_infinity))
-DO_REDUCE(ah_fmax,d, float64, H1_8, helper_vfp_ah_maxd,
+DO_REDUCE(ah_fmax, d, float64, H1_8, HELPER(vfp_ah_maxd),
           float64_chs(float64_infinity))
 
 #undef DO_REDUCE
@@ -4667,15 +4767,15 @@ DO_ZPZZ_FP(sve_fmax_h, uint16_t, H1_2, float16_max)
 DO_ZPZZ_FP(sve_fmax_s, uint32_t, H1_4, float32_max)
 DO_ZPZZ_FP(sve_fmax_d, uint64_t, H1_8, float64_max)
 
-DO_ZPZZ_FP(sve_ah_fmin_b16, uint16_t, H1_2, helper_sme2_ah_fmin_b16)
-DO_ZPZZ_FP(sve_ah_fmin_h, uint16_t, H1_2, helper_vfp_ah_minh)
-DO_ZPZZ_FP(sve_ah_fmin_s, uint32_t, H1_4, helper_vfp_ah_mins)
-DO_ZPZZ_FP(sve_ah_fmin_d, uint64_t, H1_8, helper_vfp_ah_mind)
+DO_ZPZZ_FP(sve_ah_fmin_b16, uint16_t, H1_2, HELPER(sme2_ah_fmin_b16))
+DO_ZPZZ_FP(sve_ah_fmin_h, uint16_t, H1_2, HELPER(vfp_ah_minh))
+DO_ZPZZ_FP(sve_ah_fmin_s, uint32_t, H1_4, HELPER(vfp_ah_mins))
+DO_ZPZZ_FP(sve_ah_fmin_d, uint64_t, H1_8, HELPER(vfp_ah_mind))
 
-DO_ZPZZ_FP(sve_ah_fmax_b16, uint16_t, H1_2, helper_sme2_ah_fmax_b16)
-DO_ZPZZ_FP(sve_ah_fmax_h, uint16_t, H1_2, helper_vfp_ah_maxh)
-DO_ZPZZ_FP(sve_ah_fmax_s, uint32_t, H1_4, helper_vfp_ah_maxs)
-DO_ZPZZ_FP(sve_ah_fmax_d, uint64_t, H1_8, helper_vfp_ah_maxd)
+DO_ZPZZ_FP(sve_ah_fmax_b16, uint16_t, H1_2, HELPER(sme2_ah_fmax_b16))
+DO_ZPZZ_FP(sve_ah_fmax_h, uint16_t, H1_2, HELPER(vfp_ah_maxh))
+DO_ZPZZ_FP(sve_ah_fmax_s, uint32_t, H1_4, HELPER(vfp_ah_maxs))
+DO_ZPZZ_FP(sve_ah_fmax_d, uint64_t, H1_8, HELPER(vfp_ah_maxd))
 
 DO_ZPZZ_FP(sve_fminnum_b16, uint16_t, H1_2, bfloat16_minnum)
 DO_ZPZZ_FP(sve_fminnum_h, uint16_t, H1_2, float16_minnum)
@@ -4728,19 +4828,22 @@ DO_ZPZZ_FP(sve_ah_fabd_h, uint16_t, H1_2, ah_abd_h)
 DO_ZPZZ_FP(sve_ah_fabd_s, uint32_t, H1_4, ah_abd_s)
 DO_ZPZZ_FP(sve_ah_fabd_d, uint64_t, H1_8, ah_abd_d)
 
-static inline float64 scalbn_d(float64 a, int64_t b, float_status *s)
-{
-    int b_int = MIN(MAX(b, INT_MIN), INT_MAX);
-    return float64_scalbn(a, b_int, s);
-}
-
+DO_ZPZZ_FP(sve_fscalbn_b16, int16_t, H1_2, bfloat16_scalbn)
 DO_ZPZZ_FP(sve_fscalbn_h, int16_t, H1_2, float16_scalbn)
 DO_ZPZZ_FP(sve_fscalbn_s, int32_t, H1_4, float32_scalbn)
 DO_ZPZZ_FP(sve_fscalbn_d, int64_t, H1_8, scalbn_d)
 
-DO_ZPZZ_FP(sve_fmulx_h, uint16_t, H1_2, helper_advsimd_mulxh)
-DO_ZPZZ_FP(sve_fmulx_s, uint32_t, H1_4, helper_vfp_mulxs)
-DO_ZPZZ_FP(sve_fmulx_d, uint64_t, H1_8, helper_vfp_mulxd)
+DO_ZPZZ_FP(sve_fmulx_h, uint16_t, H1_2, HELPER(advsimd_mulxh))
+DO_ZPZZ_FP(sve_fmulx_s, uint32_t, H1_4, HELPER(vfp_mulxs))
+DO_ZPZZ_FP(sve_fmulx_d, uint64_t, H1_8, HELPER(vfp_mulxd))
+
+DO_ZPZZ_FP(sve2_famax_h, uint16_t, H1_2, float16_famax)
+DO_ZPZZ_FP(sve2_famax_s, uint32_t, H1_4, float32_famax)
+DO_ZPZZ_FP(sve2_famax_d, uint64_t, H1_8, float64_famax)
+
+DO_ZPZZ_FP(sve2_famin_h, uint16_t, H1_2, float16_famin)
+DO_ZPZZ_FP(sve2_famin_s, uint32_t, H1_4, float32_famin)
+DO_ZPZZ_FP(sve2_famin_d, uint64_t, H1_8, float64_famin)
 
 #undef DO_ZPZZ_FP
 
@@ -4813,15 +4916,16 @@ DO_ZPZS_FP(sve_fmins_h, float16, H1_2, float16_min)
 DO_ZPZS_FP(sve_fmins_s, float32, H1_4, float32_min)
 DO_ZPZS_FP(sve_fmins_d, float64, H1_8, float64_min)
 
-DO_ZPZS_FP(sve_ah_fmaxs_h, float16, H1_2, helper_vfp_ah_maxh)
-DO_ZPZS_FP(sve_ah_fmaxs_s, float32, H1_4, helper_vfp_ah_maxs)
-DO_ZPZS_FP(sve_ah_fmaxs_d, float64, H1_8, helper_vfp_ah_maxd)
+DO_ZPZS_FP(sve_ah_fmaxs_h, float16, H1_2, HELPER(vfp_ah_maxh))
+DO_ZPZS_FP(sve_ah_fmaxs_s, float32, H1_4, HELPER(vfp_ah_maxs))
+DO_ZPZS_FP(sve_ah_fmaxs_d, float64, H1_8, HELPER(vfp_ah_maxd))
 
-DO_ZPZS_FP(sve_ah_fmins_h, float16, H1_2, helper_vfp_ah_minh)
-DO_ZPZS_FP(sve_ah_fmins_s, float32, H1_4, helper_vfp_ah_mins)
-DO_ZPZS_FP(sve_ah_fmins_d, float64, H1_8, helper_vfp_ah_mind)
+DO_ZPZS_FP(sve_ah_fmins_h, float16, H1_2, HELPER(vfp_ah_minh))
+DO_ZPZS_FP(sve_ah_fmins_s, float32, H1_4, HELPER(vfp_ah_mins))
+DO_ZPZS_FP(sve_ah_fmins_d, float64, H1_8, HELPER(vfp_ah_mind))
 
-/* Fully general two-operand expander, controlled by a predicate,
+/*
+ * Fully general two-operand expander, controlled by a predicate,
  * With the extra float_status parameter.
  */
 #define DO_ZPZ_FP(NAME, TYPE, H, OP)                                  \
@@ -4829,6 +4933,7 @@ void HELPER(NAME)(void *vd, void *vn, void *vg,                       \
                   float_status *status, uint32_t desc)                \
 {                                                                     \
     intptr_t i = simd_oprsz(desc);                                    \
+    bool zeroing = simd_data(desc) & 1;                               \
     uint64_t *g = vg;                                                 \
     do {                                                              \
         uint64_t pg = g[(i - 1) >> 6];                                \
@@ -4837,6 +4942,8 @@ void HELPER(NAME)(void *vd, void *vn, void *vg,                       \
             if (likely((pg >> (i & 63)) & 1)) {                       \
                 TYPE nn = *(TYPE *)(vn + H(i));                       \
                 *(TYPE *)(vd + H(i)) = OP(nn, status);                \
+            } else if (zeroing) {                                     \
+                *(TYPE *)(vd + H(i)) = 0;                             \
             }                                                         \
         } while (i & 63);                                             \
     } while (i != 0);                                                 \
@@ -4971,32 +5078,37 @@ DO_ZPZ_FP(sve_fcvt_ds, uint64_t, H1_8, float64_to_float32)
 DO_ZPZ_FP(sve_fcvt_sd, uint64_t, H1_8, float32_to_float64)
 
 DO_ZPZ_FP(sve_fcvtzs_hh, uint16_t, H1_2, vfp_float16_to_int16_rtz)
-DO_ZPZ_FP(sve_fcvtzs_hs, uint32_t, H1_4, helper_vfp_tosizh)
-DO_ZPZ_FP(sve_fcvtzs_ss, uint32_t, H1_4, helper_vfp_tosizs)
+DO_ZPZ_FP(sve_fcvtzs_hs, uint32_t, H1_4, HELPER(vfp_tosizh))
+DO_ZPZ_FP(sve_fcvtzs_ss, uint32_t, H1_4, HELPER(vfp_tosizs))
 DO_ZPZ_FP(sve_fcvtzs_hd, uint64_t, H1_8, vfp_float16_to_int64_rtz)
 DO_ZPZ_FP(sve_fcvtzs_sd, uint64_t, H1_8, vfp_float32_to_int64_rtz)
-DO_ZPZ_FP(sve_fcvtzs_ds, uint64_t, H1_8, helper_vfp_tosizd)
+DO_ZPZ_FP(sve_fcvtzs_ds, uint64_t, H1_8, HELPER(vfp_tosizd))
 DO_ZPZ_FP(sve_fcvtzs_dd, uint64_t, H1_8, vfp_float64_to_int64_rtz)
 
 DO_ZPZ_FP(sve_fcvtzu_hh, uint16_t, H1_2, vfp_float16_to_uint16_rtz)
-DO_ZPZ_FP(sve_fcvtzu_hs, uint32_t, H1_4, helper_vfp_touizh)
-DO_ZPZ_FP(sve_fcvtzu_ss, uint32_t, H1_4, helper_vfp_touizs)
+DO_ZPZ_FP(sve_fcvtzu_hs, uint32_t, H1_4, HELPER(vfp_touizh))
+DO_ZPZ_FP(sve_fcvtzu_ss, uint32_t, H1_4, HELPER(vfp_touizs))
 DO_ZPZ_FP(sve_fcvtzu_hd, uint64_t, H1_8, vfp_float16_to_uint64_rtz)
 DO_ZPZ_FP(sve_fcvtzu_sd, uint64_t, H1_8, vfp_float32_to_uint64_rtz)
-DO_ZPZ_FP(sve_fcvtzu_ds, uint64_t, H1_8, helper_vfp_touizd)
+DO_ZPZ_FP(sve_fcvtzu_ds, uint64_t, H1_8, HELPER(vfp_touizd))
 DO_ZPZ_FP(sve_fcvtzu_dd, uint64_t, H1_8, vfp_float64_to_uint64_rtz)
 
-DO_ZPZ_FP(sve_frint_h, uint16_t, H1_2, helper_advsimd_rinth)
-DO_ZPZ_FP(sve_frint_s, uint32_t, H1_4, helper_rints)
-DO_ZPZ_FP(sve_frint_d, uint64_t, H1_8, helper_rintd)
+DO_ZPZ_FP(sve_frint_h, uint16_t, H1_2, HELPER(advsimd_rinth))
+DO_ZPZ_FP(sve_frint_s, uint32_t, H1_4, HELPER(rints))
+DO_ZPZ_FP(sve_frint_d, uint64_t, H1_8, HELPER(rintd))
 
 DO_ZPZ_FP(sve_frintx_h, uint16_t, H1_2, float16_round_to_int)
 DO_ZPZ_FP(sve_frintx_s, uint32_t, H1_4, float32_round_to_int)
 DO_ZPZ_FP(sve_frintx_d, uint64_t, H1_8, float64_round_to_int)
 
-DO_ZPZ_FP(sve_frecpx_h, uint16_t, H1_2, helper_frecpx_f16)
-DO_ZPZ_FP(sve_frecpx_s, uint32_t, H1_4, helper_frecpx_f32)
-DO_ZPZ_FP(sve_frecpx_d, uint64_t, H1_8, helper_frecpx_f64)
+DO_ZPZ_FP(sve2p2_frint32_s, uint32_t, H1_4, HELPER(frint32_s))
+DO_ZPZ_FP(sve2p2_frint64_s, uint32_t, H1_4, HELPER(frint64_s))
+DO_ZPZ_FP(sve2p2_frint32_d, uint64_t, H1_8, HELPER(frint32_d))
+DO_ZPZ_FP(sve2p2_frint64_d, uint64_t, H1_8, HELPER(frint64_d))
+
+DO_ZPZ_FP(sve_frecpx_h, uint16_t, H1_2, HELPER(frecpx_f16))
+DO_ZPZ_FP(sve_frecpx_s, uint32_t, H1_4, HELPER(frecpx_f32))
+DO_ZPZ_FP(sve_frecpx_d, uint64_t, H1_8, HELPER(frecpx_f64))
 
 DO_ZPZ_FP(sve_fsqrt_h, uint16_t, H1_2, float16_sqrt)
 DO_ZPZ_FP(sve_fsqrt_s, uint32_t, H1_4, float32_sqrt)
@@ -5028,6 +5140,7 @@ static int16_t do_float16_logb_as_int(float16 a, float_status *s)
         if (frac != 0) {
             if (!get_flush_inputs_to_zero(s)) {
                 /* denormal: bias - fractional_zeros */
+                float_raise(float_flag_input_denormal_used, s);
                 return -15 - clz32(frac);
             }
             /* flush to zero */
@@ -5056,6 +5169,7 @@ static int32_t do_float32_logb_as_int(float32 a, float_status *s)
         if (frac != 0) {
             if (!get_flush_inputs_to_zero(s)) {
                 /* denormal: bias - fractional_zeros */
+                float_raise(float_flag_input_denormal_used, s);
                 return -127 - clz32(frac);
             }
             /* flush to zero */
@@ -5084,6 +5198,7 @@ static int64_t do_float64_logb_as_int(float64 a, float_status *s)
         if (frac != 0) {
             if (!get_flush_inputs_to_zero(s)) {
                 /* denormal: bias - fractional_zeros */
+                float_raise(float_flag_input_denormal_used, s);
                 return -1023 - clz64(frac);
             }
             /* flush to zero */
@@ -6375,7 +6490,7 @@ void sve_ldN_r_mte(CPUARMState *env, uint64_t *vg, target_ulong addr,
     int bit55 = extract64(addr, 55, 1);
 
     /* Perform gross MTE suppression early. */
-    if (!tbi_check(mtedesc, bit55) ||
+    if (!tbi_or_mtx_check(mtedesc, bit55) ||
         tcma_check(mtedesc, bit55, allocation_tag_from_addr(addr))) {
         mtedesc = 0;
     }
@@ -6737,7 +6852,7 @@ void sve_ldnfff1_r_mte(CPUARMState *env, void *vg, target_ulong addr,
     int bit55 = extract64(addr, 55, 1);
 
     /* Perform gross MTE suppression early. */
-    if (!tbi_check(mtedesc, bit55) ||
+    if (!tbi_or_mtx_check(mtedesc, bit55) ||
         tcma_check(mtedesc, bit55, allocation_tag_from_addr(addr))) {
         mtedesc = 0;
     }
@@ -6992,7 +7107,7 @@ void sve_stN_r_mte(CPUARMState *env, uint64_t *vg, target_ulong addr,
     int bit55 = extract64(addr, 55, 1);
 
     /* Perform gross MTE suppression early. */
-    if (!tbi_check(mtedesc, bit55) ||
+    if (!tbi_or_mtx_check(mtedesc, bit55) ||
         tcma_check(mtedesc, bit55, allocation_tag_from_addr(addr))) {
         mtedesc = 0;
     }
@@ -8564,6 +8679,7 @@ void HELPER(NAME)(void *vd, void *vn, void *vg,                               \
                   float_status *status, uint32_t desc)                        \
 {                                                                             \
     intptr_t i = simd_oprsz(desc);                                            \
+    bool zeroing = simd_data(desc) & 1;                                       \
     uint64_t *g = vg;                                                         \
     do {                                                                      \
         uint64_t pg = g[(i - 1) >> 6];                                        \
@@ -8572,6 +8688,8 @@ void HELPER(NAME)(void *vd, void *vn, void *vg,                               \
             if (likely((pg >> (i & 63)) & 1)) {                               \
                 TYPEW nn = *(TYPEW *)(vn + HW(i));                            \
                 *(TYPEN *)(vd + HN(i + sizeof(TYPEN))) = OP(nn, status);      \
+            } else if (zeroing) {                                             \
+                *(TYPEN *)(vd + HN(i + sizeof(TYPEN))) = 0;                   \
             }                                                                 \
         } while (i & 63);                                                     \
     } while (i != 0);                                                         \
@@ -8586,6 +8704,7 @@ void HELPER(NAME)(void *vd, void *vn, void *vg,                               \
                   float_status *status, uint32_t desc)                        \
 {                                                                             \
     intptr_t i = simd_oprsz(desc);                                            \
+    bool zeroing = simd_data(desc) & 1;                                       \
     uint64_t *g = vg;                                                         \
     do {                                                                      \
         uint64_t pg = g[(i - 1) >> 6];                                        \
@@ -8594,6 +8713,8 @@ void HELPER(NAME)(void *vd, void *vn, void *vg,                               \
             if (likely((pg >> (i & 63)) & 1)) {                               \
                 TYPEN nn = *(TYPEN *)(vn + HN(i + sizeof(TYPEN)));            \
                 *(TYPEW *)(vd + HW(i)) = OP(nn, status);                      \
+            } else if (zeroing) {                                             \
+                *(TYPEW *)(vd + HW(i)) = 0;                                   \
             }                                                                 \
         } while (i & 63);                                                     \
     } while (i != 0);                                                         \

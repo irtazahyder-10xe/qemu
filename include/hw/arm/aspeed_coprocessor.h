@@ -20,12 +20,8 @@ struct AspeedCoprocessorState {
     MemoryRegion *sram;
     MemoryRegion sram_alias;
     MemoryRegion uart_alias;
-    MemoryRegion scu_alias;
     Clock *sysclk;
 
-    AspeedSCUState *scu;
-    AspeedSCUState scuio;
-    AspeedTimerCtrlState timerctrl;
     SerialMM *uart;
     int uart_dev;
 };
@@ -40,16 +36,27 @@ struct AspeedCoprocessorClass {
     /** valid_cpu_types: NULL terminated array of a single CPU type. */
     const char * const *valid_cpu_types;
     const hwaddr *memmap;
+    const UnimplementedDeviceConfig *unimp_devs;
     const int *irqmap;
 };
 
 struct Aspeed27x0CoprocessorState {
     AspeedCoprocessorState parent;
     AspeedINTCState intc[2];
-    UnimplementedDeviceState ipc[2];
-    UnimplementedDeviceState scuio;
 
     ARMv7MState armv7m;
+
+    /*
+     * SCU, SCUIO and FMC are not owned by this coprocessor: they are
+     * shared with the main PSP SoC, and only aliased into this
+     * coprocessor's own address space here.
+     */
+    MemoryRegion scu_alias;
+    MemoryRegion scuio_alias;
+    MemoryRegion fmc_alias;
+    Aspeed2700SCUState *scu;
+    AspeedSCUState *scuio;
+    AspeedSMCState *fmc;
 };
 
 #define TYPE_ASPEED27X0SSP_COPROCESSOR "aspeed27x0ssp-coprocessor"

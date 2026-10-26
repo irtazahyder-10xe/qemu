@@ -18,19 +18,16 @@
 #include "qemu/error-report.h"
 #include "hw/i2c/aspeed_i2c.h"
 #include "net/net.h"
+#include "system/qtest.h"
 #include "system/system.h"
 #include "hw/intc/arm_gicv3.h"
 #include "qobject/qlist.h"
 #include "qemu/log.h"
 
-#define AST2700_SOC_IO_SIZE          0x00FE0000
-#define AST2700_SOC_IOMEM_SIZE       0x01000000
-#define AST2700_SOC_DPMCU_SIZE       0x00040000
-
 static const hwaddr aspeed_soc_ast2700_memmap[] = {
     [ASPEED_DEV_VBOOTROM]  =  0x00000000,
     [ASPEED_DEV_IOMEM]     =  0x00020000,
-    [ASPEED_DEV_SRAM]      =  0x10000000,
+    [ASPEED_DEV_SRAM0]     =  0x10000000,
     [ASPEED_DEV_DPMCU]     =  0x11000000,
     [ASPEED_DEV_IOMEM0]    =  0x12000000,
     [ASPEED_DEV_EHCI1]     =  0x12061000,
@@ -262,6 +259,14 @@ static const struct gic_intc_irq_info ast2700_gic_intcmap[] = {
     {201, 3, 1, ast2700_gic201_intcmap},
 };
 
+static const UnimplementedDeviceConfig aspeed_soc_ast2700_unimp_devs[] = {
+    { "dpmcu", "aspeed.dpmcu", 0x11000000, 0x00040000, -1000 },
+    { "iomem", "aspeed.io", 0x00020000, 0x00FE0000, -1000 },
+    { "iomem0", "aspeed.iomem0", 0x12000000, 0x01000000, -1000 },
+    { "iomem1", "aspeed.iomem1", 0x14000000, 0x01000000, -1000 },
+    { }
+};
+
 static qemu_irq aspeed_soc_ast2700_get_irq(AspeedSoCState *s, int dev)
 {
     Aspeed27x0SoCState *a = ASPEED27X0_SOC(s);
@@ -419,18 +424,27 @@ static void aspeed_soc_ast2700_init(Object *obj)
     }
 
     for (i = 0; i < sc->num_cpus; i++) {
+        if (qtest_enabled() && !target_aarch64()) {
+            /*
+             * Introspection qtest just want to create this object
+             * without realizing it. ARM_CPU_TYPE_NAME("cortex-a35")
+             * is not available on 32-bit binary: skip it since we
+             * won't even realize it.
+             */
+            continue;
+        }
         object_initialize_child(obj, "cpu[*]", &a->cpu[i],
                                 aspeed_soc_cpu_type(sc->valid_cpu_types));
     }
 
     object_initialize_child(obj, "gic", &a->gic, gicv3_class_name());
 
-    object_initialize_child(obj, "scu", &s->scu, TYPE_ASPEED_2700_SCU);
-    qdev_prop_set_uint32(DEVICE(&s->scu), "silicon-rev",
+    object_initialize_child(obj, "scu", &a->scu, TYPE_ASPEED_2700_SCU);
+    qdev_prop_set_uint32(DEVICE(&a->scu), "silicon-rev",
                          sc->silicon_rev);
-    object_property_add_alias(obj, "hw-strap1", OBJECT(&s->scu),
+    object_property_add_alias(obj, "hw-strap1", OBJECT(&a->scu),
                               "hw-strap1");
-    object_property_add_alias(obj, "hw-prot-key", OBJECT(&s->scu),
+    object_property_add_alias(obj, "hw-prot-key", OBJECT(&a->scu),
                               "hw-prot-key");
 
     object_initialize_child(obj, "scuio", &s->scuio, TYPE_ASPEED_2700_SCUIO);
@@ -548,15 +562,6 @@ static void aspeed_soc_ast2700_init(Object *obj)
         qdev_prop_set_uint32(DEVICE(&s->ioexp[i]), "silicon-rev",
                              sc->silicon_rev);
     }
-
-    object_initialize_child(obj, "dpmcu", &s->dpmcu,
-                            TYPE_UNIMPLEMENTED_DEVICE);
-    object_initialize_child(obj, "iomem", &s->iomem,
-                            TYPE_UNIMPLEMENTED_DEVICE);
-    object_initialize_child(obj, "iomem0", &s->iomem0,
-                            TYPE_UNIMPLEMENTED_DEVICE);
-    object_initialize_child(obj, "iomem1", &s->iomem1,
-                            TYPE_UNIMPLEMENTED_DEVICE);
 }
 
 /*
@@ -693,6 +698,10 @@ static void aspeed_soc_ast2700_realize(DeviceState *dev, Error **errp)
     qemu_irq irq;
     int uart;
 
+    if (qtest_enabled() && !target_aarch64()) {
+        g_assert_not_reached();
+    }
+
     /* Default boot region (SPI memory or ROMs) */
     memory_region_init(&s->spi_boot_container, OBJECT(s),
                        "aspeed.spi_boot_container", 0x400000000);
@@ -778,12 +787,12 @@ static void aspeed_soc_ast2700_realize(DeviceState *dev, Error **errp)
 
     /* SRAM */
     name = g_strdup_printf("aspeed.sram.%d", CPU(&a->cpu[0])->cpu_index);
-    if (!memory_region_init_ram(&s->sram, OBJECT(s), name, sc->sram_size,
-                                errp)) {
+    if (!memory_region_init_ram(&s->sram[0], OBJECT(s), name,
+                                sc->sram_size[0], errp)) {
         return;
     }
     memory_region_add_subregion(s->memory,
-                                sc->memmap[ASPEED_DEV_SRAM], &s->sram);
+                                sc->memmap[ASPEED_DEV_SRAM0], &s->sram[0]);
 
     /* VBOOTROM */
     if (!memory_region_init_ram(&s->vbootrom, OBJECT(s), "aspeed.vbootrom",
@@ -794,10 +803,10 @@ static void aspeed_soc_ast2700_realize(DeviceState *dev, Error **errp)
                                 sc->memmap[ASPEED_DEV_VBOOTROM], &s->vbootrom);
 
     /* SCU */
-    if (!sysbus_realize(SYS_BUS_DEVICE(&s->scu), errp)) {
+    if (!sysbus_realize(SYS_BUS_DEVICE(&a->scu), errp)) {
         return;
     }
-    aspeed_mmio_map(s->memory, SYS_BUS_DEVICE(&s->scu), 0,
+    aspeed_mmio_map(s->memory, SYS_BUS_DEVICE(&a->scu), 0,
                     sc->memmap[ASPEED_DEV_SCU]);
 
     /* SCU1 */
@@ -856,6 +865,11 @@ static void aspeed_soc_ast2700_realize(DeviceState *dev, Error **errp)
 
     /* EHCI */
     for (i = 0; i < sc->ehcis_num; i++) {
+        object_property_set_int(OBJECT(&s->ehci[i]), "ctrldssegment-default",
+                                sc->memmap[ASPEED_DEV_SDRAM] >> 32,
+                                &error_abort);
+        object_property_set_bool(OBJECT(&s->ehci[i]), "caps-64bit-addr", true,
+                                 &error_abort);
         if (!sysbus_realize(SYS_BUS_DEVICE(&s->ehci[i]), errp)) {
             return;
         }
@@ -915,7 +929,7 @@ static void aspeed_soc_ast2700_realize(DeviceState *dev, Error **errp)
         AspeedWDTClass *awc = ASPEED_WDT_GET_CLASS(&s->wdt[i]);
         hwaddr wdt_offset = sc->memmap[ASPEED_DEV_WDT] + i * awc->iosize;
 
-        object_property_set_link(OBJECT(&s->wdt[i]), "scu", OBJECT(&s->scu),
+        object_property_set_link(OBJECT(&s->wdt[i]), "scu", OBJECT(&a->scu),
                                  &error_abort);
         if (!sysbus_realize(SYS_BUS_DEVICE(&s->wdt[i]), errp)) {
             return;
@@ -1018,7 +1032,7 @@ static void aspeed_soc_ast2700_realize(DeviceState *dev, Error **errp)
                        aspeed_soc_ast2700_get_irq(s, ASPEED_DEV_EMMC));
 
     /* Timer */
-    object_property_set_link(OBJECT(&s->timerctrl), "scu", OBJECT(&s->scu),
+    object_property_set_link(OBJECT(&s->timerctrl), "scu", OBJECT(&a->scu),
                              &error_abort);
     if (!sysbus_realize(SYS_BUS_DEVICE(&s->timerctrl), errp)) {
         return;
@@ -1118,22 +1132,8 @@ static void aspeed_soc_ast2700_realize(DeviceState *dev, Error **errp)
         }
     }
 
-    aspeed_mmio_map_unimplemented(s->memory, SYS_BUS_DEVICE(&s->dpmcu),
-                                  "aspeed.dpmcu",
-                                  sc->memmap[ASPEED_DEV_DPMCU],
-                                  AST2700_SOC_DPMCU_SIZE);
-    aspeed_mmio_map_unimplemented(s->memory, SYS_BUS_DEVICE(&s->iomem),
-                                  "aspeed.io",
-                                  sc->memmap[ASPEED_DEV_IOMEM],
-                                  AST2700_SOC_IO_SIZE);
-    aspeed_mmio_map_unimplemented(s->memory, SYS_BUS_DEVICE(&s->iomem0),
-                                  "aspeed.iomem0",
-                                  sc->memmap[ASPEED_DEV_IOMEM0],
-                                  AST2700_SOC_IOMEM_SIZE);
-    aspeed_mmio_map_unimplemented(s->memory, SYS_BUS_DEVICE(&s->iomem1),
-                                  "aspeed.iomem1",
-                                  sc->memmap[ASPEED_DEV_IOMEM1],
-                                  AST2700_SOC_IOMEM_SIZE);
+    /* Unimplemented devices */
+    create_unimplemented_devices(OBJECT(s), s->memory, sc->unimp_devs);
 }
 
 static void aspeed_soc_ast2700a1_class_init(ObjectClass *oc, const void *data)
@@ -1151,7 +1151,7 @@ static void aspeed_soc_ast2700a1_class_init(ObjectClass *oc, const void *data)
 
     sc->valid_cpu_types = valid_cpu_types;
     sc->silicon_rev  = AST2700_A1_SILICON_REV;
-    sc->sram_size    = 0x20000;
+    sc->sram_size[0] = 0x20000;
     sc->pcie_num     = 3;
     sc->spis_num     = 3;
     sc->sgpio_num    = 2;
@@ -1164,6 +1164,7 @@ static void aspeed_soc_ast2700a1_class_init(ObjectClass *oc, const void *data)
     sc->uarts_base   = ASPEED_DEV_UART0;
     sc->irqmap       = aspeed_soc_ast2700a1_irqmap;
     sc->memmap       = aspeed_soc_ast2700_memmap;
+    sc->unimp_devs   = aspeed_soc_ast2700_unimp_devs;
 }
 
 static void aspeed_soc_ast2700a2_class_init(ObjectClass *oc, const void *data)
@@ -1181,7 +1182,7 @@ static void aspeed_soc_ast2700a2_class_init(ObjectClass *oc, const void *data)
 
     sc->valid_cpu_types = valid_cpu_types;
     sc->silicon_rev  = AST2700_A2_SILICON_REV;
-    sc->sram_size    = 0x20000;
+    sc->sram_size[0] = 0x20000;
     sc->pcie_num     = 3;
     sc->spis_num     = 3;
     sc->sgpio_num    = 2;
@@ -1194,6 +1195,7 @@ static void aspeed_soc_ast2700a2_class_init(ObjectClass *oc, const void *data)
     sc->uarts_base   = ASPEED_DEV_UART0;
     sc->irqmap       = aspeed_soc_ast2700a1_irqmap;
     sc->memmap       = aspeed_soc_ast2700_memmap;
+    sc->unimp_devs   = aspeed_soc_ast2700_unimp_devs;
 }
 
 static const TypeInfo aspeed_soc_ast27x0_types[] = {

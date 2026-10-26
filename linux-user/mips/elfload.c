@@ -20,17 +20,19 @@ const char *get_elf_cpu_model(uint32_t eflags)
     case EF_MIPS_MACH_LS2F:
         return "Loongson-2F";
     case EF_MIPS_MACH_LS3A:
-        return "Loongson-3A1000";
+        return (eflags & EF_MIPS_NAN2008) ? "Loongson-3A4000"
+                                          : "Loongson-3A1000";
     default:
         break;
     }
-    switch (eflags & EF_MIPS_ARCH) {
-    case EF_MIPS_ARCH_64R6:
+    if ((eflags & EF_MIPS_ARCH) == EF_MIPS_ARCH_64R6) {
         return "I6400";
-    case EF_MIPS_ARCH_64R2:
+    }
+    if (eflags & EF_MIPS_NAN2008) {
+        return "Loongson-3A4000";
+    }
+    if ((eflags & EF_MIPS_ARCH) == EF_MIPS_ARCH_64R2) {
         return "MIPS64R2-generic";
-    default:
-        break;
     }
     return "5KEf";
 #else
@@ -130,19 +132,29 @@ const char *get_elf_base_platform(CPUState *cs)
 
 #undef MATCH_PLATFORM_INSN
 
+void elf_core_copy_fpregs(target_elf_fpregset_t *r, const CPUMIPSState *env)
+{
+    for (int i = 0; i < 32; i++) {
+        r->fpr[i] = tswap64(env->active_fpu.fpr[i].d);
+    }
+    r->fcsr = tswap32(env->active_fpu.fcr31);
+}
+
 /* See linux kernel: arch/mips/kernel/process.c:elf_dump_regs.  */
+#ifndef TARGET_MIPS64
 void elf_core_copy_regs(target_elf_gregset_t *r, const CPUMIPSState *env)
 {
     for (int i = 1; i < ARRAY_SIZE(env->active_tc.gpr); i++) {
-        r->pt.regs[i] = tswapl(env->active_tc.gpr[i]);
+        r->pt.regs[i] = tswap32(env->active_tc.gpr[i]);
     }
 
     r->pt.regs[26] = 0;
     r->pt.regs[27] = 0;
-    r->pt.lo = tswapl(env->active_tc.LO[0]);
-    r->pt.hi = tswapl(env->active_tc.HI[0]);
-    r->pt.cp0_epc = tswapl(env->active_tc.PC);
-    r->pt.cp0_badvaddr = tswapl(env->CP0_BadVAddr);
-    r->pt.cp0_status = tswapl(env->CP0_Status);
-    r->pt.cp0_cause = tswapl(env->CP0_Cause);
+    r->pt.lo = tswap32(env->active_tc.LO[0]);
+    r->pt.hi = tswap32(env->active_tc.HI[0]);
+    r->pt.cp0_epc = tswap32(env->active_tc.PC);
+    r->pt.cp0_badvaddr = tswap32(env->CP0_BadVAddr);
+    r->pt.cp0_status = tswap32(env->CP0_Status);
+    r->pt.cp0_cause = tswap32(env->CP0_Cause);
 }
+#endif

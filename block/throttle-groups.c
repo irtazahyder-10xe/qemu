@@ -581,7 +581,6 @@ void throttle_group_register_tgm(ThrottleGroupMember *tgm,
     ThrottleState *ts = throttle_group_incref(groupname);
     ThrottleGroup *tg = container_of(ts, ThrottleGroup, ts);
 
-    tgm->throttle_state = ts;
     tgm->aio_context = ctx;
     qatomic_set(&tgm->restart_pending, 0);
 
@@ -602,6 +601,9 @@ void throttle_group_register_tgm(ThrottleGroupMember *tgm,
                          read_timer_cb,
                          write_timer_cb,
                          tgm);
+
+    /* The I/O path reads this without tg->lock, so publish it last */
+    qatomic_store_release(&tgm->throttle_state, ts);
 }
 
 /* Unregister a ThrottleGroupMember from its group, removing it from the list,
@@ -960,9 +962,15 @@ static void throttle_group_get_limits(Object *obj, Visitor *v,
     visit_type_ThrottleLimits(v, name, &argp, errp);
 }
 
-static bool throttle_group_can_be_deleted(UserCreatable *uc)
+static bool throttle_group_prepare_delete(UserCreatable *uc, Error **errp)
 {
-    return OBJECT(uc)->ref == 1;
+    if (OBJECT(uc)->ref > 1) {
+        error_setg(errp,
+                   "Cannot delete throttle group '%s' with active references",
+                   object_get_canonical_path_component(OBJECT(uc)));
+        return false;
+    }
+    return true;
 }
 
 static void throttle_group_obj_class_init(ObjectClass *klass,
@@ -972,13 +980,13 @@ static void throttle_group_obj_class_init(ObjectClass *klass,
     UserCreatableClass *ucc = USER_CREATABLE_CLASS(klass);
 
     ucc->complete = throttle_group_obj_complete;
-    ucc->can_be_deleted = throttle_group_can_be_deleted;
+    ucc->prepare_delete = throttle_group_prepare_delete;
 
     /* individual properties */
     for (i = 0; i < sizeof(properties) / sizeof(ThrottleParamInfo); i++) {
         object_class_property_add(klass,
                                   properties[i].name,
-                                  "int",
+                                  "int64",
                                   throttle_group_get,
                                   throttle_group_set,
                                   NULL, &properties[i]);
